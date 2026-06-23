@@ -8,13 +8,20 @@ from typing import Any
 class SegmentConfig:
     """分段参数。
 
-    当前先按字符数近似 token 数，后续可以替换为真实 tokenizer。
+    当前以字符数做默认长度约束，同时保留 token 级近似参数，
+    方便在不引入真实 tokenizer 的前提下模拟更稳健的分段策略。
     """
 
     min_chars: int = 300
     target_chars: int = 900
     max_chars: int = 1200
     overlap_sentences: int = 1
+    min_tokens: int = 180
+    target_tokens: int = 512
+    max_tokens: int = 900
+    include_heading_in_content: bool = True
+    enable_semantic_boundary: bool = True
+    semantic_boundary_threshold: float = 0.72
 
 
 @dataclass

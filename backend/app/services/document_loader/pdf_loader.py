@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
-from backend.app.services.segmenting.parser import detect_block_type
+from backend.app.services.segmenting.parser import detect_block_type, split_text_into_blocks
 from backend.app.services.segmenting.models import DocumentBlock
 
 from .exceptions import DocumentLoaderError
+
+
+TEXT_SIGNAL_PATTERN = re.compile(r"[\w\u4e00-\u9fff]", re.UNICODE)
 
 
 def load_pdf_file(file_path: str | Path) -> list[DocumentBlock]:
@@ -26,9 +30,12 @@ def load_pdf_file(file_path: str | Path) -> list[DocumentBlock]:
 
     for page_index, page in enumerate(document, start=1):
         text = page.get_text("text")
-        page_blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
+        page_blocks = split_text_into_blocks(text)
 
         for block_index, block_text in enumerate(page_blocks):
+            block_text = block_text.strip()
+            if not has_text_signal(block_text):
+                continue
             blocks.append(
                 DocumentBlock(
                     block_id=f"p{page_index:04d}_b{block_index:04d}",
@@ -41,3 +48,9 @@ def load_pdf_file(file_path: str | Path) -> list[DocumentBlock]:
 
     document.close()
     return blocks
+
+
+def has_text_signal(text: str) -> bool:
+    """过滤 PDF 抽取中的纯标点、纯符号噪声块。"""
+
+    return bool(TEXT_SIGNAL_PATTERN.search(text))

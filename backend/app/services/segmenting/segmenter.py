@@ -47,11 +47,17 @@ def segment_blocks(
         "chunks": [chunk_to_dict(chunk) for chunk in chunks],
         "statistics": build_statistics(chunks, config),
         "strategy": {
-            "name": "heading_paragraph_rule",
+            "name": "heading_sentence_semantic_rule",
             "min_chars": config.min_chars,
             "target_chars": config.target_chars,
             "max_chars": config.max_chars,
             "overlap_sentences": config.overlap_sentences,
+            "min_tokens": config.min_tokens,
+            "target_tokens": config.target_tokens,
+            "max_tokens": config.max_tokens,
+            "include_heading_in_content": config.include_heading_in_content,
+            "enable_semantic_boundary": config.enable_semantic_boundary,
+            "semantic_boundary_threshold": config.semantic_boundary_threshold,
         },
     }
 

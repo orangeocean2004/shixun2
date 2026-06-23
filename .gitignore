@@ -33,6 +33,7 @@ reports/*
 # IDE / OS
 .idea/
 .vscode/
+~$*
 *.swp
 *.swo
 Thumbs.db
