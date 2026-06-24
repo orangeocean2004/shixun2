@@ -2,12 +2,17 @@
 import ConfigPanel from '../components/ConfigPanel.vue'
 import MetricPanel from '../components/MetricPanel.vue'
 import ChunkList from '../components/ChunkList.vue'
+import RetrievalPanel from '../components/RetrievalPanel.vue'
 import { useChunkStore } from '../stores/chunkStore'
 
-const { state, submitUpload } = useChunkStore()
+const { state, submitUpload, submitQuery } = useChunkStore()
 
 function handleSubmit(payload) {
   submitUpload(payload)
+}
+
+function handleQuery(payload) {
+  submitQuery(payload)
 }
 </script>
 
@@ -20,6 +25,14 @@ function handleSubmit(payload) {
 
     <template v-if="state.result">
       <MetricPanel :statistics="state.result.statistics" :strategy="state.result.strategy" />
+      <RetrievalPanel
+        :doc-id="state.result.doc_id"
+        :index="state.result.index"
+        :result="state.queryResult"
+        :loading="state.querying"
+        :error="state.queryError"
+        @query="handleQuery"
+      />
       <ChunkList :chunks="state.result.chunks" />
     </template>
   </div>

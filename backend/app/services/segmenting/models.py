@@ -16,12 +16,42 @@ class SegmentConfig:
     target_chars: int = 900
     max_chars: int = 1200
     overlap_sentences: int = 1
-    min_tokens: int = 180
-    target_tokens: int = 512
-    max_tokens: int = 900
+    # 标题边界 flush 阈值：当前 chunk 字符数达到此值才在新标题处收束。
+    # 低于此值时，新标题会并入当前 chunk，抑制多标题文档的碎片化。
+    heading_flush_min_chars: int = 300
+    # token 默认值以 tiktoken cl100k_base 为基准校准：
+    #   中文 ≈1.09 t/c → 900c≈980t, 1200c≈1300t
+    #   英文 ≈0.25 t/c → 900c≈225t,  1200c≈300t
+    # 双目标取较小者：中文受 token 约束（~825c 触发），英文受 char 约束
+    # min_tokens=100：英文 100t≈400c，中文 100t≈90c，两者均由 min_chars=300 实际约束
+    min_tokens: int = 100
+    target_tokens: int = 900
+    max_tokens: int = 1200
     include_heading_in_content: bool = True
     enable_semantic_boundary: bool = True
-    semantic_boundary_threshold: float = 0.72
+    # 语义边界阈值（当前基于 token 重叠度，低于此值即收束当前 chunk）。
+    # 基于 token 计数的余弦相似度在中英文场景下数值偏低（中文尤甚），
+    # 因此阈值设得比基于 embedding 的相似度更保守（原 0.72 → 0.55）。
+    # 后续可接入 sentence-transformers embedding，届时阈值可调回 0.72-0.82。
+    semantic_boundary_threshold: float = 0.55
+    recursive_separators: tuple[str, ...] = (
+        "\n\n",
+        "\n",
+        "。",
+        "！",
+        "？",
+        "；",
+        ";",
+        ". ",
+        ".",
+        "，",
+        "、",
+        ",",
+        ":",
+        "：",
+        " ",
+        "",
+    )
 
 
 @dataclass

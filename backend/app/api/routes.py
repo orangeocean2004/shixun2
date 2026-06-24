@@ -14,9 +14,11 @@ from backend.app.core.config import (
     DEFAULT_OVERLAP_SENTENCES,
     DEFAULT_TARGET_CHARS,
 )
-from backend.app.models.schemas import SegmentUploadResponse
+from backend.app.models.schemas import RagQueryRequest, RagQueryResponse, SegmentIndexUploadResponse, SegmentUploadResponse
 from backend.app.services.document_loader import DocumentLoaderError, load_document
-from backend.app.services.segmenter import SegmentConfig, segment_blocks
+from backend.app.services.preprocessing import PreprocessReport, preprocess_document_blocks
+from backend.app.services.retrieval import semantic_store as vector_store
+from backend.app.services.segmenting import SegmentConfig, segment_blocks
 
 router = APIRouter()
 
@@ -34,6 +36,70 @@ async def upload_and_segment(
     target_chars: int = Form(DEFAULT_TARGET_CHARS),
     max_chars: int = Form(DEFAULT_MAX_CHARS),
     overlap_sentences: int = Form(DEFAULT_OVERLAP_SENTENCES),
+) -> SegmentUploadResponse:
+    return await process_upload_and_segment(
+        file=file,
+        doc_id=doc_id,
+        min_chars=min_chars,
+        target_chars=target_chars,
+        max_chars=max_chars,
+        overlap_sentences=overlap_sentences,
+    )
+
+
+@router.post("/api/rag/index/upload", response_model=SegmentIndexUploadResponse)
+async def upload_segment_and_index(
+    file: UploadFile = File(...),
+    doc_id: Optional[str] = Form(None),
+    min_chars: int = Form(DEFAULT_MIN_CHARS),
+    target_chars: int = Form(DEFAULT_TARGET_CHARS),
+    max_chars: int = Form(DEFAULT_MAX_CHARS),
+    overlap_sentences: int = Form(DEFAULT_OVERLAP_SENTENCES),
+) -> SegmentIndexUploadResponse:
+    result = await process_upload_and_segment(
+        file=file,
+        doc_id=doc_id,
+        min_chars=min_chars,
+        target_chars=target_chars,
+        max_chars=max_chars,
+        overlap_sentences=overlap_sentences,
+    )
+    index_summary = vector_store.upsert(result.doc_id, result.chunks)
+    return SegmentIndexUploadResponse(**result.model_dump(), index=index_summary)
+
+
+@router.post("/api/rag/query", response_model=RagQueryResponse)
+def query_index(request: RagQueryRequest) -> RagQueryResponse:
+    query = request.query.strip()
+    doc_id = request.doc_id.strip()
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="doc_id 不能为空")
+    if not query:
+        raise HTTPException(status_code=400, detail="query 不能为空")
+    if request.top_k <= 0:
+        raise HTTPException(status_code=400, detail="top_k 必须大于 0")
+
+    try:
+        hits = vector_store.search(doc_id, query, top_k=request.top_k)
+    except KeyError as exc:
+        available = ", ".join(vector_store.list_doc_ids()) or "无"
+        raise HTTPException(status_code=404, detail=f"文档未入库：{doc_id}。当前已入库：{available}") from exc
+
+    return RagQueryResponse(
+        doc_id=doc_id,
+        query=query,
+        top_k=request.top_k,
+        hits=[hit.__dict__ for hit in hits],
+    )
+
+
+async def process_upload_and_segment(
+    file: UploadFile,
+    doc_id: Optional[str],
+    min_chars: int,
+    target_chars: int,
+    max_chars: int,
+    overlap_sentences: int,
 ) -> SegmentUploadResponse:
     filename = file.filename or "upload"
     suffix = Path(filename).suffix.lower()
@@ -53,6 +119,8 @@ async def upload_and_segment(
             temp_path = temp_file.name
 
         blocks = load_document(temp_path)
+        preprocess_report: PreprocessReport | None = None
+        cleaned_blocks, preprocess_report = preprocess_document_blocks(blocks)
         config = SegmentConfig(
             min_chars=min_chars,
             target_chars=target_chars,
@@ -60,16 +128,17 @@ async def upload_and_segment(
             overlap_sentences=overlap_sentences,
         )
         result_doc_id = doc_id.strip() if doc_id and doc_id.strip() else safe_doc_id(Path(filename).stem)
-        result = segment_blocks(blocks, doc_id=result_doc_id, config=config)
+        result = segment_blocks(cleaned_blocks, doc_id=result_doc_id, config=config)
 
         return SegmentUploadResponse(
             doc_id=result["doc_id"],
             file_name=filename,
             file_size=len(payload),
-            block_count=len(blocks),
+            block_count=len(cleaned_blocks),
             chunks=result["chunks"],
             statistics=result["statistics"],
             strategy=result["strategy"],
+            preprocess=preprocess_report.to_dict(),
         )
     except DocumentLoaderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

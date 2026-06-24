@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from .models import Chunk, SegmentConfig
-
-
-TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\s]")
+from .splitter import count_tokens
 
 
 def build_statistics(chunks: list[Chunk], config: SegmentConfig) -> dict[str, Any]:
@@ -57,9 +54,3 @@ def chunk_to_dict(chunk: Chunk) -> dict[str, Any]:
         "strategy_info": chunk.strategy_info,
         "quality_flags": chunk.quality_flags,
     }
-
-
-def count_tokens(text: str) -> int:
-    """用轻量正则估算 token 数。"""
-
-    return len(TOKEN_PATTERN.findall(text or ""))

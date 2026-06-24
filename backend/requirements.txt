@@ -5,3 +5,6 @@ pymupdf
 python-multipart
 langchain
 langchain-openai
+scikit-learn
+tiktoken
+sentence-transformers

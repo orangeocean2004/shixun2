@@ -42,7 +42,11 @@ def build_candidate_chunks(
 
     for block in blocks:
         if block.block_type == "heading":
-            flush_current("heading_boundary")
+            # 仅当已累积足够内容时才收束；短节段与后续内容合并，
+            # 避免多标题文档（如报告）产生大量碎片。
+            current_text = candidate_text(current_blocks) if current_blocks else ""
+            if len(current_text) >= config.heading_flush_min_chars:
+                flush_current("heading_boundary")
             level = heading_level(block.text)
             title = normalize_heading(block.text)
             title_stack = [(item_level, item_title) for item_level, item_title in title_stack if item_level < level]
@@ -50,7 +54,10 @@ def build_candidate_chunks(
             current_title_path = [item_title for _, item_title in title_stack]
             current_heading_block = block
             if config.include_heading_in_content:
-                current_blocks = [block]
+                if not current_blocks:
+                    current_blocks = [block]
+                else:
+                    current_blocks.append(block)
             continue
 
         if is_protected_block(block):
@@ -83,6 +90,13 @@ def build_candidate_chunks(
 
         if not current_blocks and config.include_heading_in_content and current_heading_block is not None:
             current_blocks = [current_heading_block]
+
+        # 预检查：如果加入当前 block 会导致 token 溢出，先收束再添加
+        if current_blocks and not is_heading_only(current_blocks):
+            current_tokens = count_tokens(candidate_text(current_blocks))
+            block_tokens = count_tokens(block.text)
+            if current_tokens + block_tokens > config.max_tokens and current_tokens >= config.min_tokens:
+                flush_current("pre_add_token_overflow")
 
         current_blocks.append(block)
 
@@ -166,6 +180,7 @@ def merge_short_chunks(
         merged.append(pending)
         index = look_ahead
 
+    merged = rebalance_short_chunks(merged, config)
     merged = absorb_trailing_short_chunks(merged, config)
     return merged
 
@@ -226,33 +241,27 @@ def split_candidate_content(
         body = strip_leading_heading(body, heading_prefix)
 
     max_body_chars = available_body_chars(heading_prefix, config)
-    sentences = split_sentences_by_length(body, max_body_chars)
-    if not sentences:
-        sentences = [body]
-
-    pieces: list[dict[str, Any]] = []
-    current: list[str] = []
-
-    for sentence in sentences:
-        if current and len("".join(current)) + len(sentence) > max_body_chars:
-            pieces.append(build_piece(heading_prefix, current, source_blocks))
-            current = bounded_overlap(current, config.overlap_sentences, max_body_chars)
-            while current and len("".join(current)) + len(sentence) > max_body_chars:
-                current.pop(0)
-        current.append(sentence)
-
-    if current:
-        pieces.append(build_piece(heading_prefix, current, source_blocks))
-
+    # token 感知：取 chars 和 tokens 两者中更严格的约束
+    # 用当前 chunk 的实际 t/c 比率估算对应的 char 上限
+    effective_max_chars = _token_aware_char_limit(body, config)
+    effective_max_chars = min(max_body_chars, effective_max_chars)
+    pieces = split_text_recursively(body, effective_max_chars, config)
     if not pieces:
-        pieces.append(
+        pieces = [body]
+
+    result: list[dict[str, Any]] = []
+    for piece in pieces:
+        result.append(build_piece(heading_prefix, [piece], source_blocks))
+
+    if not result:
+        result.append(
             {
                 "content": content.strip(),
                 "source_blocks": list(source_blocks),
             }
         )
 
-    return [piece for piece in pieces if piece["content"].strip()]
+    return [piece for piece in result if piece["content"].strip()]
 
 
 def build_piece(
@@ -285,19 +294,87 @@ def strip_leading_heading(content: str, heading: str) -> str:
 
 
 def split_long_text(text: str, config: SegmentConfig) -> list[str]:
-    """按句子切分超长文本，并给后续 chunk 添加少量句子 overlap。"""
+    """递归切分超长文本，并给后续 chunk 添加少量 overlap。"""
 
-    sentences = split_sentences_by_length(text, config.max_chars)
+    return split_text_recursively(text, config.max_chars, config)
+
+
+def split_text_recursively(text: str, max_chars: int, config: SegmentConfig) -> list[str]:
+    """按 LangChain RecursiveCharacterTextSplitter 的思路切分文本。
+
+    优先保留段落、换行和句子边界；只有当某个单元仍超过长度上限时，
+    才继续使用更细粒度的分隔符，最后用硬切作为兜底。
+    """
+
+    limit = max(1, max_chars)
+    normalized = text.strip()
+    if not normalized:
+        return []
+    if len(normalized) <= limit:
+        return [normalized]
+
+    units = recursive_split_units(normalized, limit, config.recursive_separators)
+    return merge_recursive_units(units, limit, config.overlap_sentences)
+
+
+def recursive_split_units(text: str, max_chars: int, separators: tuple[str, ...]) -> list[str]:
+    """递归拆出不超过长度上限的基础文本单元。"""
+
+    stripped = text.strip()
+    if not stripped:
+        return []
+    if len(stripped) <= max_chars:
+        return [stripped]
+
+    if not separators:
+        return split_unit_by_length(stripped, max_chars)
+
+    separator = choose_separator(stripped, separators)
+    remaining_separators = separators[separators.index(separator) + 1 :]
+
+    if separator == "":
+        return split_unit_by_length(stripped, max_chars)
+
+    raw_parts = stripped.split(separator)
+    units: list[str] = []
+    for index, raw_part in enumerate(raw_parts):
+        if not raw_part.strip():
+            continue
+        part = raw_part
+        if index < len(raw_parts) - 1:
+            part = f"{part}{separator}"
+        if len(part) > max_chars:
+            units.extend(recursive_split_units(part, max_chars, remaining_separators))
+        else:
+            units.append(part)
+    return units
+
+
+def choose_separator(text: str, separators: tuple[str, ...]) -> str:
+    """选择当前文本中可用的最粗粒度分隔符。"""
+
+    for separator in separators:
+        if separator == "" or separator in text:
+            return separator
+    return ""
+
+
+def merge_recursive_units(units: list[str], max_chars: int, overlap_count: int) -> list[str]:
+    """把递归拆出的基础单元组合成接近长度上限的 chunk。"""
+
     pieces: list[str] = []
     current: list[str] = []
 
-    for sentence in sentences:
-        if current and len("".join(current)) + len(sentence) > config.max_chars:
+    for unit in units:
+        unit = unit.strip(" \t")
+        if not unit.strip():
+            continue
+        if current and len("".join(current)) + len(unit) > max_chars:
             pieces.append("".join(current).strip())
-            current = bounded_overlap(current, config.overlap_sentences, config.max_chars)
-            while current and len("".join(current)) + len(sentence) > config.max_chars:
+            current = bounded_overlap(current, overlap_count, max_chars)
+            while current and len("".join(current)) + len(unit) > max_chars:
                 current.pop(0)
-        current.append(sentence)
+        current.append(unit)
 
     if current:
         pieces.append("".join(current).strip())
@@ -349,6 +426,27 @@ def best_split_position(text: str, limit: int) -> int:
     return limit
 
 
+def _token_aware_char_limit(text: str, config: SegmentConfig) -> int:
+    """根据文本实际 t/c 比率，估算不超过 max_tokens 的最大字符数。
+
+    中文 ~1.09 t/c → max_chars 更严格；英文 ~0.25 t/c → max_tokens 形同虚设。
+    这个函数让拆分器在中英文混合场景下都能避免 token 溢出。
+    """
+
+    char_count = len(text)
+    if char_count == 0:
+        return config.max_chars
+    token_count = count_tokens(text)
+    if token_count <= config.max_tokens:
+        return config.max_chars
+    # 比率 < 1 意味着 chars > tokens（英文），不需要收紧
+    ratio = token_count / char_count
+    if ratio <= 1.0:
+        return config.max_chars
+    # 收紧：按比例降低 char 上限，留 5% 余量
+    return max(1, int(config.max_tokens / ratio * 0.95))
+
+
 def available_body_chars(heading_prefix: str, config: SegmentConfig) -> int:
     """计算带标题前缀时正文可使用的字符预算。"""
 
@@ -377,13 +475,29 @@ def is_long_block(block: DocumentBlock, config: SegmentConfig) -> bool:
 
 
 def should_flush_for_length_boundary(blocks: list[DocumentBlock], config: SegmentConfig) -> bool:
-    """判断当前累计块是否已经达到收束条件。"""
+    """判断当前累计块是否已经达到收束条件。
+
+    双目标取较小者：当字符数或 token 数任一达到目标区间时即收束。
+    tiktoken 下中文约 1.09 t/c，英文约 0.25 t/c，双目标可保证
+    两种语言都在安全范围内。
+    """
 
     if not blocks:
         return False
     content = candidate_text(blocks)
-    if len(content) < config.target_chars and count_tokens(content) < config.target_tokens:
+    token_count = count_tokens(content)
+
+    chars_reached = len(content) >= config.target_chars
+    tokens_reached = token_count >= config.target_tokens
+
+    # 两个指标都未达目标 → 继续累积
+    if not chars_reached and not tokens_reached:
         return False
+
+    # token 已达硬上限 → 必须收束（安全网）
+    if token_count >= config.max_tokens:
+        return True
+
     if is_heading_only(blocks):
         return False
     return True
@@ -457,6 +571,118 @@ def merge_candidates(left: CandidateChunk, right: CandidateChunk) -> CandidateCh
     }
 
 
+def rebalance_short_chunks(
+    chunks: list[CandidateChunk],
+    config: SegmentConfig,
+) -> list[CandidateChunk]:
+    """在无法整体合并时，从前一个 chunk 匀一些句子给过短的 chunk。
+
+    场景：章节末段因标题边界 flush 变成孤儿 chunk（< min_chars），
+    但与前块合并又超出 max_chars。此时从前块尾部拆出若干句子补入孤儿，
+    使双方都在 min~max 区间内。
+
+    只对共享标题前缀的相邻普通 chunk 生效；不触及表格/代码/公式。
+    """
+
+    if len(chunks) < 2:
+        return chunks
+
+    result = list(chunks)
+    index = 1  # 从第二个 chunk 开始检查
+
+    while index < len(result):
+        prev = result[index - 1]
+        curr = result[index]
+
+        # 只处理普通块
+        if prev["chunk_type"] != "normal" or curr["chunk_type"] != "normal":
+            index += 1
+            continue
+
+        # 不需要重平衡
+        if curr["char_count"] >= config.min_chars:
+            index += 1
+            continue
+        if prev["char_count"] <= config.min_chars:
+            index += 1
+            continue
+
+        # 只在共享标题上下文时重平衡，避免跨主题混合。
+        # 两个 chunk 都没有标题（无标题文档）时也允许重平衡。
+        shared = common_title_path(prev["title_path"], curr["title_path"])
+        both_empty = not prev["title_path"] and not curr["title_path"]
+        if len(shared) < 1 and not both_empty:
+            index += 1
+            continue
+
+        # 计算需要从前块移多少字符到后块
+        deficit = config.min_chars - curr["char_count"]
+        # 额外多移一些作为缓冲，避免刚好卡在边界
+        move_target = min(deficit + 80, prev["char_count"] - config.min_chars)
+        if move_target <= 0:
+            index += 1
+            continue
+
+        prev_text = prev["content"]
+        prev_sentences = split_sentences(prev_text)
+        if len(prev_sentences) <= 1:
+            index += 1
+            continue
+
+        # 从后往前取句子，直到累计长度达到 move_target
+        moved_chars = 0
+        moved_parts: list[str] = []
+        remaining_prev = list(prev_sentences)
+
+        while moved_chars < move_target and len(remaining_prev) > 1:
+            sentence = remaining_prev.pop().strip()
+            if not sentence:
+                continue
+            moved_parts.insert(0, sentence)
+            moved_chars += len(sentence)
+
+        if not moved_parts:
+            index += 1
+            continue
+
+        # 重建两个 chunk
+        new_prev_content = "".join(remaining_prev).strip()
+        moved_content = "".join(moved_parts).strip()
+        new_curr_content = f"{moved_content}\n\n{curr['content']}".strip()
+
+        # 更新 prev
+        result[index - 1] = {
+            **prev,
+            "content": new_prev_content,
+            "char_count": len(new_prev_content),
+            "token_count": count_tokens(new_prev_content),
+            "strategy_info": {
+                **prev["strategy_info"],
+                "rebalanced": True,
+                "rebalance_role": "donor",
+                "chars_donated": moved_chars,
+            },
+        }
+
+        # 更新 curr
+        result[index] = {
+            **curr,
+            "content": new_curr_content,
+            "char_count": len(new_curr_content),
+            "token_count": count_tokens(new_curr_content),
+            "strategy_info": {
+                **curr["strategy_info"],
+                "rebalanced": True,
+                "rebalance_role": "recipient",
+                "chars_received": moved_chars,
+            },
+        }
+
+        index += 1
+
+    return result
+
+
 def absorb_trailing_short_chunks(chunks: list[CandidateChunk], config: SegmentConfig) -> list[CandidateChunk]:
     """把尾部仍然偏短、且能自然并入前一块的 chunk 吃掉。"""
 
@@ -498,9 +724,36 @@ def clone_block(block: DocumentBlock, text: str) -> DocumentBlock:
     )
 
 
-def count_tokens(text: str) -> int:
-    """用轻量正则估算 token 数。"""
+_tiktoken_encoder: Any = None
 
+
+def _get_tiktoken_encoder() -> Any:
+    """延迟加载 tiktoken 编码器，避免导入时的网络开销。"""
+    global _tiktoken_encoder
+    if _tiktoken_encoder is not None:
+        return _tiktoken_encoder
+    try:
+        import tiktoken
+
+        _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        _tiktoken_encoder = False
+    return _tiktoken_encoder
+
+
+def count_tokens(text: str) -> int:
+    """估算文本的 BPE token 数。
+
+    优先使用 tiktoken（cl100k_base，GPT-4 / GPT-3.5 通用编码），
+    无法加载时回退到轻量正则近似。
+    """
+
+    encoder = _get_tiktoken_encoder()
+    if encoder and encoder is not False:
+        try:
+            return len(encoder.encode(text or ""))
+        except Exception:
+            pass
     return len(TOKEN_PATTERN.findall(text or ""))
 
 
