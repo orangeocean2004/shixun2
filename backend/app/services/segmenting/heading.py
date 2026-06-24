@@ -10,6 +10,12 @@ HEADING_PATTERNS = [
     re.compile(r"^\d+(?:\.\d+){0,5}[、. ]\s*(.+)$"),
 ]
 
+TOC_PAGE_REF_PATTERNS = [
+    re.compile(r"\t+\s*-?\s*\d+\s*-?\s*$"),
+    re.compile(r"\.{2,}\s*\d+\s*$"),
+    re.compile(r"\s+-\s*\d+\s*-\s*$"),
+]
+
 
 def is_heading(text: str) -> bool:
     """判断一个文本块是否像标题。
@@ -20,7 +26,15 @@ def is_heading(text: str) -> bool:
     first_line = text.strip().splitlines()[0]
     if len(first_line) > 80:
         return False
+    if looks_like_toc_entry(first_line):
+        return False
     return any(pattern.match(first_line) for pattern in HEADING_PATTERNS)
+
+
+def looks_like_toc_entry(text: str) -> bool:
+    """Reject table-of-contents rows such as '1. Intro    - 4 -'."""
+
+    return any(pattern.search(text.strip()) for pattern in TOC_PAGE_REF_PATTERNS)
 
 
 def heading_level(text: str) -> int:

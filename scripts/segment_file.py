@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.app.services.document_loader import load_document
+from backend.app.services.document_preprocessor import preprocess_document_blocks
 from backend.app.services.segmenter import SegmentConfig, segment_blocks
 
 
@@ -29,6 +30,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-chars", type=int, default=900, help="Preferred chunk size in characters.")
     parser.add_argument("--max-chars", type=int, default=1200, help="Maximum chunk size in characters.")
     parser.add_argument("--overlap-sentences", type=int, default=1, help="Sentence overlap when splitting long chunks.")
+    parser.add_argument(
+        "--clean-document",
+        action="store_true",
+        help="Remove cover/table-of-contents noise and flatten body-like tables before segmenting.",
+    )
     return parser.parse_args()
 
 
@@ -46,14 +52,22 @@ def main() -> None:
     )
 
     blocks = load_document(input_path)
+    preprocess_report = None
+    if args.clean_document:
+        blocks, preprocess_report = preprocess_document_blocks(blocks)
+
     result = segment_blocks(blocks, doc_id=doc_id, config=config)
     result["source_file"] = str(input_path)
     result["block_count"] = len(blocks)
+    if preprocess_report is not None:
+        result["preprocessing"] = preprocess_report.to_dict()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"Loaded blocks: {len(blocks)}")
+    if preprocess_report is not None:
+        print(f"Preprocessing: {preprocess_report.to_dict()}")
     print(f"Generated chunks: {result['statistics']['chunk_count']}")
     print(f"Output written: {output_path}")
 
