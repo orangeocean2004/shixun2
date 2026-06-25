@@ -29,11 +29,9 @@ class SegmentConfig:
     max_tokens: int = 1200
     include_heading_in_content: bool = True
     enable_semantic_boundary: bool = True
-    # 语义边界阈值（当前基于 token 重叠度，低于此值即收束当前 chunk）。
-    # 基于 token 计数的余弦相似度在中英文场景下数值偏低（中文尤甚），
-    # 因此阈值设得比基于 embedding 的相似度更保守（原 0.72 → 0.55）。
-    # 后续可接入 sentence-transformers embedding，届时阈值可调回 0.72-0.82。
-    semantic_boundary_threshold: float = 0.55
+    # 语义边界阈值。当前优先使用 sentence-transformers embedding，
+    # 失败时回退 token 计数余弦；0.35 在课程样例上能抑制过度碎片化。
+    semantic_boundary_threshold: float = 0.35
     recursive_separators: tuple[str, ...] = (
         "\n\n",
         "\n",
@@ -66,6 +64,7 @@ class DocumentBlock:
     block_type: str = "paragraph"
     page: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    asset_refs: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -80,6 +79,12 @@ class Chunk:
     source_refs: list[dict[str, Any]]
     strategy_info: dict[str, Any]
     quality_flags: list[str] = field(default_factory=list)
+    section_titles: list[str] = field(default_factory=list)
+    retrieval_text: str = ""
+    tags: list[str] = field(default_factory=list)
+    summary: str = ""
+    entity_labels: list[dict[str, str]] = field(default_factory=list)
+    asset_refs: list[dict[str, str]] = field(default_factory=list)
 
 
 CandidateChunk = dict[str, Any]

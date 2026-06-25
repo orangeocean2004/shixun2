@@ -1,9 +1,65 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .heading import is_heading
 from .models import DocumentBlock
+
+
+# ── Asset reference detection ─────────────────────────────
+
+_ASSET_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp",
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+    ".zip", ".tar", ".gz", ".7z",
+    ".py", ".json", ".yaml", ".yml", ".csv", ".sql",
+}
+
+_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_MD_LINK = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)]+)\)")
+
+
+def extract_asset_refs(text: str) -> list[dict[str, str]]:
+    """从文本中提取外置资产引用（图片/附件/文件链接）。
+
+    只识别两类 Markdown 语法：
+    - 图片：``![alt](path)``
+    - 文件链接：``[text](path)``（path 指向已知扩展名或相对路径）
+    """
+    refs: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for match in _MD_IMAGE.finditer(text):
+        alt = match.group(1).strip()
+        path = match.group(2).strip()
+        if path not in seen and _is_local_asset(path):
+            seen.add(path)
+            refs.append({"type": "image", "path": path, "alt": alt})
+
+    for match in _MD_LINK.finditer(text):
+        label = match.group(1).strip()
+        path = match.group(2).strip()
+        if path not in seen and _is_local_asset(path):
+            seen.add(path)
+            label_lower = label.lower()
+            if any(kw in label_lower for kw in ("图", "表", "fig", "table", "附件", "attached")):
+                refs.append({"type": "attachment", "path": path, "label": label})
+
+    return refs
+
+
+def _is_local_asset(path: str) -> bool:
+    """判断路径是否为本地资产引用（非 http URL）。"""
+    if path.startswith(("http://", "https://", "mailto:", "#")):
+        return False
+    suffix = Path(path).suffix.lower()
+    if suffix in _ASSET_EXTENSIONS:
+        return True
+    # 无扩展名但路径像是文件路径的，也认定为资产
+    if "/" in path or "\\" in path:
+        return bool(suffix)  # 有路径分隔符且有扩展名
+    return False
 
 
 def parse_plain_text(text: str) -> list[DocumentBlock]:
@@ -51,6 +107,7 @@ def parse_plain_text(text: str) -> list[DocumentBlock]:
                 block_id=f"b{raw_index:04d}",
                 text=block,
                 block_type=block_type,
+                asset_refs=extract_asset_refs(block),
             )
         )
 

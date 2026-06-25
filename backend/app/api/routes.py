@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from backend.app.core.config import (
     ALLOWED_UPLOAD_SUFFIXES,
@@ -16,16 +17,35 @@ from backend.app.core.config import (
 )
 from backend.app.models.schemas import RagQueryRequest, RagQueryResponse, SegmentIndexUploadResponse, SegmentUploadResponse
 from backend.app.services.document_loader import DocumentLoaderError, load_document
+from backend.app.services.model_client import LLMClient
+from backend.app.services.organizer import ContentOrganizer
 from backend.app.services.preprocessing import PreprocessReport, preprocess_document_blocks
 from backend.app.services.retrieval import semantic_store as vector_store
 from backend.app.services.segmenting import SegmentConfig, segment_blocks
 
 router = APIRouter()
 
+_IMAGES_BASE_DIR = Path("data/images")
+
 
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/api/images/{doc_id}/{filename}")
+def serve_image(doc_id: str, filename: str):
+    """提供文档中提取的图片文件。"""
+    # 安全检查：防止路径穿越
+    if ".." in doc_id or "/" in doc_id or "\\" in doc_id:
+        raise HTTPException(status_code=400, detail="非法的 doc_id")
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="非法的 filename")
+
+    image_path = _IMAGES_BASE_DIR / doc_id / filename
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="图片未找到")
+    return FileResponse(str(image_path))
 
 
 @router.post("/api/segment/upload", response_model=SegmentUploadResponse)
@@ -118,7 +138,13 @@ async def process_upload_and_segment(
             temp_file.write(payload)
             temp_path = temp_file.name
 
-        blocks = load_document(temp_path)
+        result_doc_id = doc_id.strip() if doc_id and doc_id.strip() else safe_doc_id(Path(filename).stem)
+
+        # 创建图片存储目录
+        image_dir = str(_IMAGES_BASE_DIR / result_doc_id)
+        os.makedirs(image_dir, exist_ok=True)
+
+        blocks = load_document(temp_path, doc_id=result_doc_id, image_dir=image_dir)
         preprocess_report: PreprocessReport | None = None
         cleaned_blocks, preprocess_report = preprocess_document_blocks(blocks)
         config = SegmentConfig(
@@ -127,8 +153,19 @@ async def process_upload_and_segment(
             max_chars=max_chars,
             overlap_sentences=overlap_sentences,
         )
-        result_doc_id = doc_id.strip() if doc_id and doc_id.strip() else safe_doc_id(Path(filename).stem)
-        result = segment_blocks(cleaned_blocks, doc_id=result_doc_id, config=config)
+
+        # Build content organiser — LLM if API key configured, else rule-based.
+        openai_api_key = os.environ.get("OPENAI_API_KEY")
+        openai_base_url = os.environ.get("OPENAI_BASE_URL")
+        llm_client = None
+        if openai_api_key:
+            llm_client = LLMClient(
+                api_key=openai_api_key,
+                base_url=openai_base_url,
+            )
+        organizer = ContentOrganizer(llm_client=llm_client)
+
+        result = segment_blocks(cleaned_blocks, doc_id=result_doc_id, config=config, organizer=organizer)
 
         return SegmentUploadResponse(
             doc_id=result["doc_id"],
@@ -139,6 +176,7 @@ async def process_upload_and_segment(
             statistics=result["statistics"],
             strategy=result["strategy"],
             preprocess=preprocess_report.to_dict(),
+            document_summary=result.get("document_summary", ""),
         )
     except DocumentLoaderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

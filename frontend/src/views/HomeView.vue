@@ -33,7 +33,7 @@ function handleQuery(payload) {
         :error="state.queryError"
         @query="handleQuery"
       />
-      <ChunkList :chunks="state.result.chunks" />
+      <ChunkList :chunks="state.result.chunks" :doc-id="state.result.doc_id" />
     </template>
   </div>
 </template>

@@ -23,9 +23,6 @@ SYSTEM_PROMPT = (
     "你会根据标题边界、主题连续性和长度约束，把连续的文本块分成多个 chunk。"
     "输出必须是 JSON，不要输出任何解释。"
 )
-DEFAULT_API_KEY = "KQ7nwixd3svlWvVH7jOFZgavykY1KCqwV0GOK9dy2Ev1vTLb"
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AI chunking demo for long documents")
     parser.add_argument("input", help="Input file path, e.g. assets/研发计划.pdf")
@@ -43,8 +40,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--api-key",
-        default=DEFAULT_API_KEY,
-        help="API key",
+        default=os.getenv("AI_API_KEY", ""),
+        help="API key (or set AI_API_KEY env var)",
     )
     parser.add_argument("--min-chars", type=int, default=300)
     parser.add_argument("--target-chars", type=int, default=900)

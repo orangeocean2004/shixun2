@@ -14,6 +14,7 @@ class SegmentUploadResponse(BaseModel):
     statistics: dict[str, Any]
     strategy: dict[str, Any]
     preprocess: dict[str, Any] | None = None
+    document_summary: str | None = None
 
 
 class SegmentIndexUploadResponse(SegmentUploadResponse):

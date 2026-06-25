@@ -39,8 +39,12 @@ reports/*
 Thumbs.db
 Desktop.ini
 
-# Logs
-*.log
+# API keys (temporary / local)
+.api_key_tmp
+.api_key
+
+# Extracted document images
+data/images/
 
 # Large local model/cache files
 *.bin
