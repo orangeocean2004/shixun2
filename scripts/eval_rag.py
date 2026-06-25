@@ -119,20 +119,20 @@ def run_evaluation() -> dict[str, Any]:
         }
 
         for qi, question in enumerate(eval_doc.questions, start=1):
-            # Set reference for semantic relevance judgment
-            judge.set_reference(" ".join(question.answer_keywords))
+            # Set reference for hybrid keyword + embedding relevance judgment
+            judge.set_reference(" ".join(question.answer_keywords), question.answer_keywords)
 
             # Smart retrieval
             smart_hits = store.search(
                 f"{eval_doc.doc_id}_smart", question.question, top_k=5
             )
-            smart_metrics = compute_ir_metrics(smart_hits, judge)
+            smart_metrics = compute_ir_metrics(smart_hits, judge, all_chunks=smart_chunks)
 
             # Baseline retrieval
             baseline_hits = store.search(
                 f"{eval_doc.doc_id}_baseline", question.question, top_k=5
             )
-            baseline_metrics = compute_ir_metrics(baseline_hits, judge)
+            baseline_metrics = compute_ir_metrics(baseline_hits, judge, all_chunks=baseline_chunks)
 
             doc_results["smart"].append(smart_metrics)
             doc_results["baseline"].append(baseline_metrics)
@@ -148,10 +148,21 @@ def run_evaluation() -> dict[str, Any]:
                 f"  Q{qi}: R@5 S={smart_metrics['recall@5']:.2f} "
                 f"B={baseline_metrics['recall@5']:.2f}  [{winner}]"
             )
+            if smart_metrics["recall@5"] < baseline_metrics["recall@5"]:
+                print("     smart miss:", summarize_hit(smart_hits[0]) if smart_hits else "(no hit)")
+                print("     base top:  ", summarize_hit(baseline_hits[0]) if baseline_hits else "(no hit)")
 
         all_results[eval_doc.doc_id] = doc_results
 
     return all_results
+
+
+def summarize_hit(hit: dict[str, Any]) -> str:
+    """Compact one retrieved hit for failure analysis output."""
+
+    content = str(hit.get("content", "")).replace("\n", " ")
+    content = " ".join(content.split())
+    return f"{hit.get('chunk_id', '')} score={hit.get('score', 0):.4f} {content[:120]}"
 
 
 # ── Report ───────────────────────────────────────────────
@@ -162,7 +173,7 @@ METRICS = ["recall@1", "recall@3", "recall@5", "precision@5", "ndcg@5", "mrr"]
 def print_summary(results: dict[str, Any]) -> None:
     print(f"\n{'='*70}")
     print("SUMMARY: Smart vs Baseline (Fixed-512)")
-    print("Retrieval: embedding (MiniLM)  |  Relevance: embedding similarity")
+    print("Retrieval: embedding (MiniLM)  |  Relevance: keyword + embedding over all chunks")
     print(f"{'='*70}")
 
     all_smart: dict[str, list[float]] = {m: [] for m in METRICS}

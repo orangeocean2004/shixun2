@@ -17,6 +17,7 @@ Model:
 
 from __future__ import annotations
 
+import re
 import threading
 from typing import Any
 
@@ -100,7 +101,8 @@ class EmbeddingStore:
         model = _get_model()
         query_vec = _encode([query], model)
         scores = index.similarity(query_vec[0])
-        ranked = scores.argsort()[::-1][:top_k]
+        reranked = rerank_scores(query, index.chunks, scores)
+        ranked = reranked.argsort()[::-1][:top_k]
 
         hits: list[dict[str, Any]] = []
         for idx in ranked:
@@ -109,7 +111,8 @@ class EmbeddingStore:
                 {
                     "chunk_id": chunk.get("chunk_id", ""),
                     "content": chunk.get("content", ""),
-                    "score": round(float(scores[idx]), 6),
+                    "score": round(float(reranked[idx]), 6),
+                    "embedding_score": round(float(scores[idx]), 6),
                     "title_path": chunk.get("title_path", []),
                     "chunk_type": chunk.get("chunk_type", "normal"),
                     "char_count": chunk.get("char_count", 0),
@@ -136,12 +139,77 @@ def _enrich_text(chunk: dict[str, Any]) -> str:
     This gives small, focused chunks the semantic breadth of their document
     context, improving recall without losing precision.
     """
+    retrieval_text = chunk.get("retrieval_text")
+    if isinstance(retrieval_text, str) and retrieval_text.strip():
+        return retrieval_text
+
     title_path = chunk.get("title_path", [])
+    section_titles = chunk.get("section_titles", [])
     content = chunk.get("content", "")
+    prefixes: list[str] = []
     if title_path:
-        prefix = " > ".join(title_path)
-        return f"{prefix}: {content}"
+        prefixes.append(" > ".join(title_path))
+    if section_titles:
+        prefixes.append("；".join(section_titles))
+    if prefixes:
+        return f"{' | '.join(prefixes)}: {content}"
     return content
+
+
+def rerank_scores(query: str, chunks: list[dict[str, Any]], scores: np.ndarray) -> np.ndarray:
+    """Add a small lexical boost from retrieval_text without overriding embeddings."""
+
+    query_terms = extract_query_terms(query)
+    if not query_terms:
+        return scores
+
+    adjusted = scores.astype(np.float32, copy=True)
+    metric_query = is_metric_query(query)
+    for index, chunk in enumerate(chunks):
+        retrieval_text = _enrich_text(chunk)
+        normalized = normalize_text(retrieval_text)
+        matches = sum(1 for term in query_terms if term in normalized)
+        if matches:
+            adjusted[index] += min(0.08, 0.025 * matches)
+        if metric_query and chunk.get("chunk_type") == "metric":
+            adjusted[index] += 0.05
+    return adjusted
+
+
+def extract_query_terms(query: str) -> list[str]:
+    """Extract stable terms from Chinese/English natural-language queries."""
+
+    normalized_query = normalize_text(query)
+    terms: list[str] = []
+    for term in re.findall(r"[A-Za-z][A-Za-z0-9_@.+-]{1,}|[\u4e00-\u9fff]{2,}", query or ""):
+        value = normalize_text(term)
+        if len(value) >= 2 and value not in terms:
+            terms.append(value)
+    for phrase in (
+        "技术难点",
+        "验收标准",
+        "评价指标",
+        "技术方案",
+        "项目创新点",
+        "差异化优势",
+        "固定长度",
+        "语义感知",
+        "结构感知",
+        "下游检索",
+        "闭环评估",
+    ):
+        value = normalize_text(phrase)
+        if value in normalized_query and value not in terms:
+            terms.append(value)
+    return terms
+
+
+def normalize_text(text: str) -> str:
+    return re.sub(r"\s+", "", (text or "").lower())
+
+
+def is_metric_query(query: str) -> bool:
+    return bool(re.search(r"(验收|指标|命中率|准确率|完整率|Recall|nDCG|MRR|%|多少)", query or "", re.I))
 
 
 class _EmbeddingIndex:

@@ -86,6 +86,11 @@ def finalize_chunks(
             quality_flags.append("missing_source_ref")
         if candidate["chunk_type"] in {"table", "formula", "code"}:
             quality_flags.append(f'contains_{candidate["chunk_type"]}')
+        if candidate["chunk_type"] == "metric":
+            quality_flags.append("contains_metric")
+
+        section_titles = list(candidate.get("section_titles", []))
+        retrieval_text = build_retrieval_text(candidate)
 
         chunks.append(
             Chunk(
@@ -97,10 +102,32 @@ def finalize_chunks(
                 source_refs=build_source_refs(candidate["source_blocks"]),
                 strategy_info=candidate["strategy_info"],
                 quality_flags=quality_flags,
+                section_titles=section_titles,
+                retrieval_text=retrieval_text,
             )
         )
 
     return chunks
+
+
+def build_retrieval_text(candidate: CandidateChunk) -> str:
+    """构造专供检索使用的增强文本，不改变原文 content。"""
+
+    parts: list[str] = []
+    title_path = candidate.get("title_path") or []
+    section_titles = candidate.get("section_titles") or []
+    metric_keywords = candidate.get("metric_keywords") or []
+
+    if title_path:
+        parts.append("标题路径: " + " > ".join(str(item) for item in title_path if str(item).strip()))
+    if section_titles:
+        parts.append("包含小节: " + "；".join(str(item) for item in section_titles if str(item).strip()))
+    if metric_keywords:
+        parts.append("关键指标: " + "；".join(str(item) for item in metric_keywords if str(item).strip()))
+    if candidate.get("chunk_type") == "metric":
+        parts.append("内容类型: 技术指标 验收标准 评价指标 百分比 阈值")
+    parts.append(str(candidate.get("content", "")))
+    return "\n".join(part for part in parts if part.strip()).strip()
 
 
 def build_source_refs(blocks: list[DocumentBlock]) -> list[dict[str, Any]]:

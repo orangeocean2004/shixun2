@@ -5,6 +5,7 @@ from pathlib import Path
 
 from backend.app.services.document_loader import load_document
 from backend.app.services.retrieval import InMemoryVectorStore
+from backend.app.services.evaluation import EmbeddingRelevance, compute_ir_metrics
 from backend.app.services.segmenting import SegmentConfig, segment_blocks, segment_text
 
 
@@ -71,6 +72,62 @@ class SegmentingSmokeTest(unittest.TestCase):
         hits = store.search("doc", "原文回链怎么做", top_k=1)
 
         self.assertEqual(hits[0].chunk_id, "doc_chunk_0001")
+
+    def test_merged_short_sections_keep_first_title_path(self) -> None:
+        text = "\n".join(
+            [
+                "一、背景",
+                "背景内容。" * 60,
+                "二、目标",
+                "目标内容。" * 18,
+                "三、能力",
+                "能力内容。" * 18,
+            ]
+        )
+        config = SegmentConfig(
+            min_chars=300,
+            target_chars=900,
+            max_chars=1200,
+            heading_flush_min_chars=300,
+            enable_semantic_boundary=False,
+        )
+
+        result = segment_text(text, doc_id="titles", config=config)
+        merged = next(chunk for chunk in result["chunks"] if "二、目标" in chunk["content"])
+
+        self.assertEqual(merged["title_path"], ["二、目标"])
+        self.assertIn("二、目标", merged["section_titles"])
+        self.assertIn("三、能力", merged["section_titles"])
+        self.assertIn("包含小节", merged["retrieval_text"])
+
+    def test_metric_chunk_builds_retrieval_text(self) -> None:
+        text = "\n".join(
+            [
+                "一、验收标准",
+                "不破句率 100%；表格/公式/代码整体成块率 ≥ 95%；目标长度区间命中率 ≥ 90%。",
+            ]
+        )
+
+        result = segment_text(text, doc_id="metrics")
+        chunk = result["chunks"][0]
+
+        self.assertEqual(chunk["chunk_type"], "metric")
+        self.assertIn("contains_metric", chunk["quality_flags"])
+        self.assertIn("关键指标", chunk["retrieval_text"])
+        self.assertIn("不破句率", chunk["retrieval_text"])
+
+    def test_metrics_recall_uses_all_relevant_chunks(self) -> None:
+        chunks = [
+            {"content": "不破句率 100%", "score": 0.9},
+            {"content": "目标长度区间命中率 90%", "score": 0.8},
+        ]
+        judge = EmbeddingRelevance()
+        judge.set_reference("不破句率 目标长度区间命中率", ["不破句率", "目标长度区间命中率"])
+
+        metrics = compute_ir_metrics([chunks[0]], judge, all_chunks=chunks)
+
+        self.assertEqual(metrics["recall@1"], 0.5)
+        self.assertEqual(metrics["precision@1"], 1.0)
 
 
 if __name__ == "__main__":

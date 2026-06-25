@@ -13,6 +13,7 @@ Architecture:
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -43,16 +44,23 @@ class EmbeddingRelevance:
 
     _reference_vec: np.ndarray | None = field(default=None, repr=False, init=False)
     _reference_text: str = ""
+    _keywords: list[str] = field(default_factory=list, repr=False, init=False)
 
-    def set_reference(self, text: str) -> None:
+    def set_reference(self, text: str, keywords: list[str] | None = None) -> None:
         """Set the reference answer text to compare chunks against.
 
         Typically this is the concatenation of answer_keywords from
         the evaluation dataset.
         """
-        if text == self._reference_text and self._reference_vec is not None:
+        normalized_keywords = [keyword.strip() for keyword in keywords or [] if keyword.strip()]
+        if (
+            text == self._reference_text
+            and normalized_keywords == self._keywords
+            and self._reference_vec is not None
+        ):
             return
         self._reference_text = text
+        self._keywords = normalized_keywords
         model = _get_model()
         vecs = _encode([text], model)
         self._reference_vec = vecs[0]
@@ -71,9 +79,27 @@ class EmbeddingRelevance:
             return 0.0
         return dot / (ref_norm * chunk_norm)
 
+    def keyword_score(self, chunk_content: str) -> float:
+        """Return the share of expected answer keywords found in the chunk."""
+
+        if not self._keywords:
+            return 0.0
+        normalized = normalize_for_keyword_match(chunk_content)
+        hits = 0
+        for keyword in self._keywords:
+            if normalize_for_keyword_match(keyword) in normalized:
+                hits += 1
+        return hits / len(self._keywords)
+
     def is_relevant(self, chunk_content: str) -> bool:
         """True if the chunk is semantically relevant to the reference."""
-        return self.score(chunk_content) >= self.threshold
+        keyword_score = self.keyword_score(chunk_content)
+        if keyword_score >= 0.34:
+            return True
+        if keyword_score > 0 and contains_number_or_metric(chunk_content):
+            return True
+        semantic_threshold = max(self.threshold, 0.57) if self._keywords else self.threshold
+        return self.score(chunk_content) >= semantic_threshold
 
     def judge_batch(self, chunks: list[dict[str, Any]]) -> list[bool]:
         """Return relevance labels for a batch of chunks."""
@@ -85,6 +111,7 @@ class EmbeddingRelevance:
 def compute_ir_metrics(
     retrieved_chunks: list[dict[str, Any]],
     relevance_judge: EmbeddingRelevance,
+    all_chunks: list[dict[str, Any]] | None = None,
     k_values: tuple[int, ...] = (1, 3, 5),
 ) -> dict[str, float]:
     """Compute Recall@k, Precision@k, MRR, and nDCG@k.
@@ -99,9 +126,16 @@ def compute_ir_metrics(
         Dict mapping metric name → value.
     """
 
+    if isinstance(all_chunks, tuple):
+        k_values = all_chunks
+        all_chunks = None
+
     relevance = relevance_judge.judge_batch(retrieved_chunks)
     scores = [c.get("score", 0.0) for c in retrieved_chunks]
-    total_relevant = sum(relevance)
+    if all_chunks is None:
+        total_relevant = sum(relevance)
+    else:
+        total_relevant = sum(relevance_judge.judge_batch(all_chunks))
 
     metrics: dict[str, float] = {}
 
@@ -117,17 +151,16 @@ def compute_ir_metrics(
         # Precision@k
         metrics[f"precision@{k}"] = sum(rel_at_k) / effective_k if effective_k > 0 else 0.0
 
-        # nDCG@k
+        # nDCG@k: binary relevance gain, so irrelevant high-score hits do not look perfect.
         dcg = 0.0
         idcg = 0.0
         for i in range(effective_k):
-            gain = scores[i] if i < len(scores) else 0.0
+            gain = 1.0 if relevance[i] else 0.0
             denom = math.log2(i + 2)
             dcg += gain / denom
-        # Ideal DCG: top relevant items at top effective_k
-        ideal_gains = sorted(scores[: len(scores)], reverse=True)[:effective_k]
-        for i, gain in enumerate(ideal_gains):
-            idcg += gain / math.log2(i + 2)
+        ideal_relevant = min(total_relevant, effective_k)
+        for i in range(ideal_relevant):
+            idcg += 1.0 / math.log2(i + 2)
         metrics[f"ndcg@{k}"] = dcg / idcg if idcg > 0 else 0.0
 
     # MRR
@@ -139,6 +172,18 @@ def compute_ir_metrics(
         metrics["mrr"] = 0.0
 
     return metrics
+
+
+def normalize_for_keyword_match(text: str) -> str:
+    """Normalize text for robust Chinese/English keyword containment."""
+
+    return re.sub(r"\s+", "", (text or "").lower())
+
+
+def contains_number_or_metric(text: str) -> bool:
+    """Detect chunks that contain numeric metric evidence."""
+
+    return bool(re.search(r"(\d+%|≥|≤|>=|<=|Recall@|nDCG|MRR|命中率|准确率|完整率)", text or ""))
 
 
 # ── Segmenter comparison ────────────────────────────────
