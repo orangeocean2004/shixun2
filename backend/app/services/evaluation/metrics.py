@@ -1,0 +1,233 @@
+"""RAG retrieval evaluation metrics.
+
+Provides semantic relevance judgment (embedding similarity instead of
+keyword matching) and standard IR metrics: Recall@k, Precision@k,
+MRR, nDCG.
+
+Architecture:
+    EmbeddingRelevance  — judges relevance via embedding cosine similarity
+    compute_ir_metrics  — computes Recall/Precision/MRR/nDCG from ranked hits
+    compare_segmenters  — runs a full side-by-side comparison
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+import numpy as np
+
+from backend.app.services.retrieval.embedding_store import _encode, _get_model
+
+
+# ── Relevance judge ─────────────────────────────────────
+
+@dataclass
+class EmbeddingRelevance:
+    """Judge chunk relevance by embedding similarity to reference text.
+
+    Instead of exact keyword matching (which penalizes synonyms),
+    this encodes the reference text and each chunk into the same
+    embedding space and uses cosine similarity as the relevance score.
+
+    A chunk is "relevant" if similarity >= threshold.
+    """
+
+    threshold: float = 0.45
+    """Cosine similarity threshold for relevance (0..1).
+
+    With the MiniLM-L12-v2 model, 0.45 is a conservative threshold
+    that captures semantic relatedness without too many false positives.
+    """
+
+    _reference_vec: np.ndarray | None = field(default=None, repr=False, init=False)
+    _reference_text: str = ""
+
+    def set_reference(self, text: str) -> None:
+        """Set the reference answer text to compare chunks against.
+
+        Typically this is the concatenation of answer_keywords from
+        the evaluation dataset.
+        """
+        if text == self._reference_text and self._reference_vec is not None:
+            return
+        self._reference_text = text
+        model = _get_model()
+        vecs = _encode([text], model)
+        self._reference_vec = vecs[0]
+
+    def score(self, chunk_content: str) -> float:
+        """Return relevance score (cosine similarity) for a chunk."""
+        if self._reference_vec is None:
+            return 0.0
+        model = _get_model()
+        chunk_vec = _encode([chunk_content], model)[0]
+        # Cosine similarity
+        dot = float(np.dot(self._reference_vec, chunk_vec))
+        ref_norm = float(np.linalg.norm(self._reference_vec))
+        chunk_norm = float(np.linalg.norm(chunk_vec))
+        if ref_norm == 0 or chunk_norm == 0:
+            return 0.0
+        return dot / (ref_norm * chunk_norm)
+
+    def is_relevant(self, chunk_content: str) -> bool:
+        """True if the chunk is semantically relevant to the reference."""
+        return self.score(chunk_content) >= self.threshold
+
+    def judge_batch(self, chunks: list[dict[str, Any]]) -> list[bool]:
+        """Return relevance labels for a batch of chunks."""
+        return [self.is_relevant(c.get("content", "")) for c in chunks]
+
+
+# ── IR metrics ──────────────────────────────────────────
+
+def compute_ir_metrics(
+    retrieved_chunks: list[dict[str, Any]],
+    relevance_judge: EmbeddingRelevance,
+    k_values: tuple[int, ...] = (1, 3, 5),
+) -> dict[str, float]:
+    """Compute Recall@k, Precision@k, MRR, and nDCG@k.
+
+    Args:
+        retrieved_chunks: Ranked list of retrieved chunk dicts.
+        relevance_judge: Configured EmbeddingRelevance instance with
+                         reference text already set.
+        k_values: Which cut-off ranks to compute metrics for.
+
+    Returns:
+        Dict mapping metric name → value.
+    """
+
+    relevance = relevance_judge.judge_batch(retrieved_chunks)
+    scores = [c.get("score", 0.0) for c in retrieved_chunks]
+    total_relevant = sum(relevance)
+
+    metrics: dict[str, float] = {}
+
+    for k in k_values:
+        effective_k = min(k, len(relevance))
+        rel_at_k = relevance[:effective_k]
+
+        # Recall@k
+        metrics[f"recall@{k}"] = (
+            sum(rel_at_k) / total_relevant if total_relevant > 0 else 0.0
+        )
+
+        # Precision@k
+        metrics[f"precision@{k}"] = sum(rel_at_k) / effective_k if effective_k > 0 else 0.0
+
+        # nDCG@k
+        dcg = 0.0
+        idcg = 0.0
+        for i in range(effective_k):
+            gain = scores[i] if i < len(scores) else 0.0
+            denom = math.log2(i + 2)
+            dcg += gain / denom
+        # Ideal DCG: top relevant items at top effective_k
+        ideal_gains = sorted(scores[: len(scores)], reverse=True)[:effective_k]
+        for i, gain in enumerate(ideal_gains):
+            idcg += gain / math.log2(i + 2)
+        metrics[f"ndcg@{k}"] = dcg / idcg if idcg > 0 else 0.0
+
+    # MRR
+    for rank, rel in enumerate(relevance, start=1):
+        if rel:
+            metrics["mrr"] = 1.0 / rank
+            break
+    else:
+        metrics["mrr"] = 0.0
+
+    return metrics
+
+
+# ── Segmenter comparison ────────────────────────────────
+
+@dataclass
+class SegmenterComparison:
+    """Result of comparing two segmenters on one document."""
+
+    doc_id: str
+    smart_chunk_count: int
+    baseline_chunk_count: int
+    questions: list[_QuestionResult] = field(default_factory=list)
+
+    @property
+    def smart_wins(self) -> int:
+        return sum(1 for q in self.questions if q.winner == "smart")
+
+    @property
+    def baseline_wins(self) -> int:
+        return sum(1 for q in self.questions if q.winner == "baseline")
+
+    @property
+    def ties(self) -> int:
+        return sum(1 for q in self.questions if q.winner == "tie")
+
+
+@dataclass
+class _QuestionResult:
+    question: str
+    smart_metrics: dict[str, float]
+    baseline_metrics: dict[str, float]
+    winner: str  # "smart", "baseline", or "tie"
+
+
+def run_segmenter_comparison(
+    doc_id: str,
+    questions: list[tuple[str, str]],
+    smart_chunks: list[dict[str, Any]],
+    baseline_chunks: list[dict[str, Any]],
+    retrieval_fn: Callable[[str, str, int], list[dict[str, Any]]],
+    relevance_threshold: float = 0.45,
+) -> SegmenterComparison:
+    """Run a head-to-head comparison between smart and baseline segmentation.
+
+    Args:
+        doc_id: Document identifier.
+        questions: List of (question_text, reference_answer_text) tuples.
+        smart_chunks: Chunks from the smart segmenter.
+        baseline_chunks: Chunks from the fixed-length baseline.
+        retrieval_fn: Function(query, doc_id_suffix, top_k) → ranked hits.
+        relevance_threshold: Cosine similarity threshold for relevance.
+
+    Returns:
+        SegmenterComparison with per-question and aggregate results.
+    """
+    comparison = SegmenterComparison(
+        doc_id=doc_id,
+        smart_chunk_count=len(smart_chunks),
+        baseline_chunk_count=len(baseline_chunks),
+    )
+
+    judge = EmbeddingRelevance(threshold=relevance_threshold)
+
+    for question, reference in questions:
+        judge.set_reference(reference)
+
+        # Smart retrieval
+        smart_hits = retrieval_fn(question, f"{doc_id}_smart", 5)
+        smart_metrics = compute_ir_metrics(smart_hits, judge)
+
+        # Baseline retrieval
+        baseline_hits = retrieval_fn(question, f"{doc_id}_baseline", 5)
+        baseline_metrics = compute_ir_metrics(baseline_hits, judge)
+
+        # Determine winner by recall@5
+        if smart_metrics["recall@5"] > baseline_metrics["recall@5"]:
+            winner = "smart"
+        elif baseline_metrics["recall@5"] > smart_metrics["recall@5"]:
+            winner = "baseline"
+        else:
+            winner = "tie"
+
+        comparison.questions.append(
+            _QuestionResult(
+                question=question,
+                smart_metrics=smart_metrics,
+                baseline_metrics=baseline_metrics,
+                winner=winner,
+            )
+        )
+
+    return comparison
