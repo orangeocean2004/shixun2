@@ -1,0 +1,14 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5e0bf0fd7705a2b23afcbd0e690f711fb77a348e",
+  "prompts": {},
+  "humans": {
+    "h_2dbf7784d9323e": {
+      "author": "Gmailgy66 <gy2649263674@Gamil.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
