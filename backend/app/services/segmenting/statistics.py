@@ -56,6 +56,10 @@ def chunk_to_dict(chunk: Chunk) -> dict[str, Any]:
         "source_refs": chunk.source_refs,
         "strategy_info": chunk.strategy_info,
         "quality_flags": chunk.quality_flags,
+        "label": chunk.label,
+        "summary": chunk.summary,
+        "entity_tags": chunk.entity_tags,
+        "backlink": chunk.backlink,
     }
 
 

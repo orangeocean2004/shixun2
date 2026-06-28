@@ -1,26 +1,64 @@
 <script setup>
+import { ref, watch } from 'vue'
+
 const props = defineProps({
   chunks: {
     type: Array,
     required: true,
   },
 })
+
+const collapsedIds = ref(new Set())
+
+function isCollapsed(chunkId) {
+  return collapsedIds.value.has(chunkId)
+}
+
+function toggleChunk(chunkId) {
+  if (collapsedIds.value.has(chunkId)) {
+    collapsedIds.value.delete(chunkId)
+    return
+  }
+  collapsedIds.value.add(chunkId)
+}
+
+function collapseAll() {
+  collapsedIds.value = new Set(props.chunks.map((chunk) => chunk.chunk_id))
+}
+
+watch(
+  () => props.chunks,
+  () => {
+    collapsedIds.value = new Set()
+  },
+)
 </script>
 
 <template>
   <section class="panel">
-    <h2>分段结果（{{ props.chunks.length }}）</h2>
+    <div class="panel-head">
+      <h2>分段结果（{{ props.chunks.length }}）</h2>
+      <button type="button" class="bulk-btn" @click="collapseAll">收起所有</button>
+    </div>
     <article v-for="chunk in props.chunks" :key="chunk.chunk_id" class="chunk-card">
-      <div class="meta">
-        <strong>{{ chunk.chunk_id }}</strong>
-        <span>type: {{ chunk.chunk_type }}</span>
-        <span>chars: {{ chunk.char_count }}</span>
+      <div class="chunk-head">
+        <div class="meta">
+          <strong>{{ chunk.chunk_id }}</strong>
+          <span>type: {{ chunk.chunk_type }}</span>
+          <span>chars: {{ chunk.char_count }}</span>
+        </div>
+        <button type="button" class="toggle-btn" @click="toggleChunk(chunk.chunk_id)">
+          {{ isCollapsed(chunk.chunk_id) ? '展开' : '收起' }}
+        </button>
       </div>
-      <p v-if="chunk.title_path?.length" class="title-path">title_path: {{ chunk.title_path.join(' > ') }}</p>
-      <pre class="content">{{ chunk.content }}</pre>
-      <p v-if="chunk.quality_flags?.length" class="flags">
-        quality_flags: {{ chunk.quality_flags.join(', ') }}
-      </p>
+
+      <div v-if="!isCollapsed(chunk.chunk_id)">
+        <p v-if="chunk.title_path?.length" class="title-path">title_path: {{ chunk.title_path.join(' > ') }}</p>
+        <pre class="content">{{ chunk.content }}</pre>
+        <p v-if="chunk.quality_flags?.length" class="flags">
+          quality_flags: {{ chunk.quality_flags.join(', ') }}
+        </p>
+      </div>
     </article>
   </section>
 </template>
@@ -33,11 +71,41 @@ const props = defineProps({
   background: #fff;
 }
 
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.panel-head h2 {
+  margin: 0;
+}
+
+.bulk-btn {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
 .chunk-card {
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   padding: 12px;
   margin-bottom: 12px;
+}
+
+.chunk-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
 .meta {
@@ -46,7 +114,17 @@ const props = defineProps({
   flex-wrap: wrap;
   font-size: 13px;
   color: #374151;
-  margin-bottom: 8px;
+}
+
+.toggle-btn {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .title-path {

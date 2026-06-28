@@ -7,14 +7,13 @@ from typing import Any
 from .heading import heading_level, normalize_heading
 from .models import CandidateChunk, DocumentBlock, SegmentConfig
 
-
 SENTENCE_PATTERN = re.compile(r"[^。！？!?；;.\n]+[。！？!?；;.]?")
 TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\s]")
 
 
 def build_candidate_chunks(
-    blocks: list[DocumentBlock],
-    config: SegmentConfig,
+        blocks: list[DocumentBlock],
+        config: SegmentConfig,
 ) -> list[CandidateChunk]:
     """把结构化 block 序列变成候选 chunk。
 
@@ -60,7 +59,8 @@ def build_candidate_chunks(
                 # 保留标题上下文，避免特殊块脱离语义背景。
                 special_blocks = [current_heading_block, block]
             candidates.append(make_candidate(special_blocks, current_title_path, f"protected_{block.block_type}"))
-            current_blocks = [current_heading_block] if config.include_heading_in_content and current_heading_block is not None else []
+            current_blocks = [
+                current_heading_block] if config.include_heading_in_content and current_heading_block is not None else []
             continue
 
         if current_blocks and not is_heading_only(current_blocks):
@@ -78,7 +78,8 @@ def build_candidate_chunks(
                 if config.include_heading_in_content and current_heading_block is not None:
                     piece_blocks = [current_heading_block, piece_block]
                 candidates.append(make_candidate(piece_blocks, current_title_path, "long_block_sentence_split"))
-            current_blocks = [current_heading_block] if config.include_heading_in_content and current_heading_block is not None else []
+            current_blocks = [
+                current_heading_block] if config.include_heading_in_content and current_heading_block is not None else []
             continue
 
         if not current_blocks and config.include_heading_in_content and current_heading_block is not None:
@@ -96,8 +97,8 @@ def build_candidate_chunks(
 
 
 def split_oversized_chunks(
-    candidates: list[CandidateChunk],
-    config: SegmentConfig,
+        candidates: list[CandidateChunk],
+        config: SegmentConfig,
 ) -> list[CandidateChunk]:
     """把超长普通 chunk 再按句子边界拆开。"""
 
@@ -128,8 +129,8 @@ def split_oversized_chunks(
 
 
 def merge_short_chunks(
-    candidates: list[CandidateChunk],
-    config: SegmentConfig,
+        candidates: list[CandidateChunk],
+        config: SegmentConfig,
 ) -> list[CandidateChunk]:
     """自适应合并过短 chunk。
 
@@ -143,7 +144,7 @@ def merge_short_chunks(
 
     while index < len(candidates):
         current = candidates[index]
-        if current["chunk_type"] in {"table", "formula", "code"}:
+        if is_protected_block(current["source_blocks"][0]):
             merged.append(current)
             index += 1
             continue
@@ -183,9 +184,9 @@ def is_heading_only(blocks: list[DocumentBlock]) -> bool:
 
 
 def make_candidate(
-    blocks: list[DocumentBlock],
-    title_path: list[str],
-    split_reason: str,
+        blocks: list[DocumentBlock],
+        title_path: list[str],
+        split_reason: str,
 ) -> CandidateChunk:
     """把若干 DocumentBlock 打包成一个候选 chunk。"""
 
@@ -212,9 +213,9 @@ def candidate_text(blocks: list[DocumentBlock]) -> str:
 
 
 def split_candidate_content(
-    content: str,
-    source_blocks: list[DocumentBlock],
-    config: SegmentConfig,
+        content: str,
+        source_blocks: list[DocumentBlock],
+        config: SegmentConfig,
 ) -> list[dict[str, Any]]:
     """把超长 chunk 拆成更小的候选文本片段。"""
 
@@ -256,9 +257,9 @@ def split_candidate_content(
 
 
 def build_piece(
-    heading_prefix: str,
-    sentences: list[str],
-    source_blocks: list[DocumentBlock],
+        heading_prefix: str,
+        sentences: list[str],
+        source_blocks: list[DocumentBlock],
 ) -> dict[str, Any]:
     """构造一个拆分后的片段。"""
 

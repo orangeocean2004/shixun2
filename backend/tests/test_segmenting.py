@@ -22,6 +22,17 @@ class SegmentingSmokeTest(unittest.TestCase):
         self.assertGreaterEqual(statistics["target_length_hit_rate"], 1.0)
         self.assertLessEqual(statistics["chunk_count"], 4)
 
+        for chunk in result["chunks"]:
+            self.assertIn("label", chunk)
+            self.assertIn("summary", chunk)
+            self.assertIn("entity_tags", chunk)
+            self.assertIn("backlink", chunk)
+            self.assertEqual(chunk["backlink"]["source_ref_count"], len(chunk["source_refs"]))
+            self.assertEqual(
+                set(chunk["backlink"]["source_ref_ids"]),
+                {ref["block_id"] for ref in chunk["source_refs"]},
+            )
+
     def test_docx_sample_keeps_source_refs_complete(self) -> None:
         blocks = load_document(PROJECT_ROOT / "assets" / "开题报告_课题11_面向RAG的智能分段与内容组织智能体.docx")
         result = segment_blocks(blocks, doc_id="open_report")
@@ -30,6 +41,17 @@ class SegmentingSmokeTest(unittest.TestCase):
         self.assertEqual(statistics["oversized_count"], 0)
         self.assertEqual(statistics["source_ref_complete_rate"], 1.0)
         self.assertLessEqual(statistics["chunk_count"], 20)
+
+        for chunk in result["chunks"]:
+            self.assertIn("label", chunk)
+            self.assertIn("summary", chunk)
+            self.assertIn("entity_tags", chunk)
+            self.assertIn("backlink", chunk)
+            self.assertEqual(chunk["backlink"]["source_ref_count"], len(chunk["source_refs"]))
+            self.assertEqual(
+                set(chunk["backlink"]["source_ref_ids"]),
+                {ref["block_id"] for ref in chunk["source_refs"]},
+            )
 
 
 if __name__ == "__main__":

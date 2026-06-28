@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from .enrichment import build_backlink, build_label, build_summary, extract_entity_tags
 from .models import CandidateChunk, Chunk, DocumentBlock, SegmentConfig
 from .parser import parse_plain_text
-from .splitter import build_candidate_chunks, split_oversized_chunks, merge_short_chunks
+from .splitter import build_candidate_chunks, merge_short_chunks, split_oversized_chunks
 from .statistics import build_statistics, chunk_to_dict
 
 
@@ -75,7 +76,11 @@ def finalize_chunks(
     chunks: list[Chunk] = []
 
     for index, candidate in enumerate(candidates, start=1):
-        char_count = len(candidate["content"])
+        chunk_id = f"{doc_id}_chunk_{index:04d}"
+        content = candidate["content"]
+        char_count = len(content)
+        source_refs = build_source_refs(candidate["source_blocks"])
+
         quality_flags: list[str] = []
         if char_count > config.max_chars:
             quality_flags.append("oversized")
@@ -86,16 +91,23 @@ def finalize_chunks(
         if candidate["chunk_type"] in {"table", "formula", "code"}:
             quality_flags.append(f'contains_{candidate["chunk_type"]}')
 
+        strategy_info = dict(candidate["strategy_info"])
+        strategy_info["enrichment"] = "deterministic_v1"
+
         chunks.append(
             Chunk(
-                chunk_id=f"{doc_id}_chunk_{index:04d}",
-                content=candidate["content"],
+                chunk_id=chunk_id,
+                content=content,
                 title_path=candidate["title_path"],
                 chunk_type=candidate["chunk_type"],
                 char_count=char_count,
-                source_refs=build_source_refs(candidate["source_blocks"]),
-                strategy_info=candidate["strategy_info"],
+                source_refs=source_refs,
+                strategy_info=strategy_info,
                 quality_flags=quality_flags,
+                label=build_label(candidate["title_path"], candidate["chunk_type"], content),
+                summary=build_summary(content),
+                entity_tags=extract_entity_tags(content),
+                backlink=build_backlink(doc_id, chunk_id, source_refs),
             )
         )
 
