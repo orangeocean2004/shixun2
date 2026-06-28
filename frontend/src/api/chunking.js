@@ -23,3 +23,16 @@ export async function uploadAndSegment({
     body: form,
   })
 }
+
+export async function queryRetrievedChunks({ docId, question }) {
+  return apiFetch('/api/query', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      doc_id: docId,
+      question,
+    }),
+  })
+}

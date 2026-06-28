@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 
 const props = defineProps({
   chunks: {
@@ -9,6 +9,7 @@ const props = defineProps({
 })
 
 const collapsedIds = ref(new Set())
+const chunkElements = new Map()
 
 function isCollapsed(chunkId) {
   return collapsedIds.value.has(chunkId)
@@ -26,6 +27,69 @@ function collapseAll() {
   collapsedIds.value = new Set(props.chunks.map((chunk) => chunk.chunk_id))
 }
 
+function normalizeLabelItem(item) {
+  if (!item) {
+    return ''
+  }
+  if (typeof item === 'string') {
+    return item.trim()
+  }
+  if (typeof item === 'object') {
+    if (typeof item.name === 'string') {
+      return item.name.trim()
+    }
+    if (typeof item.label === 'string') {
+      return item.label.trim()
+    }
+    if (typeof item.value === 'string') {
+      return item.value.trim()
+    }
+  }
+  return ''
+}
+
+function getChunkLabels(chunk) {
+  const source = chunk.labels ?? chunk.label
+  if (Array.isArray(source)) {
+    return source.map(normalizeLabelItem).filter(Boolean)
+  }
+  if (typeof source === 'string' && source.trim()) {
+    return [source.trim()]
+  }
+  return []
+}
+
+function getChunkSummary(chunk) {
+  if (typeof chunk.summary === 'string' && chunk.summary.trim()) {
+    return chunk.summary.trim()
+  }
+  return ''
+}
+
+function setChunkRef(chunkId, el) {
+  if (!el) {
+    chunkElements.delete(chunkId)
+    return
+  }
+  chunkElements.set(chunkId, el)
+}
+
+async function scrollToChunk(chunkId) {
+  if (!chunkId) {
+    return
+  }
+  collapsedIds.value.delete(chunkId)
+  await nextTick()
+  chunkElements.get(chunkId)?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  })
+}
+
+defineExpose({
+  scrollToChunk,
+})
+
 watch(
   () => props.chunks,
   () => {
@@ -40,7 +104,12 @@ watch(
       <h2>分段结果（{{ props.chunks.length }}）</h2>
       <button type="button" class="bulk-btn" @click="collapseAll">收起所有</button>
     </div>
-    <article v-for="chunk in props.chunks" :key="chunk.chunk_id" class="chunk-card">
+    <article
+      v-for="chunk in props.chunks"
+      :key="chunk.chunk_id"
+      :ref="(el) => setChunkRef(chunk.chunk_id, el)"
+      class="chunk-card"
+    >
       <div class="chunk-head">
         <div class="meta">
           <strong>{{ chunk.chunk_id }}</strong>
@@ -54,6 +123,8 @@ watch(
 
       <div v-if="!isCollapsed(chunk.chunk_id)">
         <p v-if="chunk.title_path?.length" class="title-path">title_path: {{ chunk.title_path.join(' > ') }}</p>
+        <p v-if="getChunkSummary(chunk)" class="summary">summary: {{ getChunkSummary(chunk) }}</p>
+        <p v-if="getChunkLabels(chunk).length" class="labels">labels: {{ getChunkLabels(chunk).join(', ') }}</p>
         <pre class="content">{{ chunk.content }}</pre>
         <p v-if="chunk.quality_flags?.length" class="flags">
           quality_flags: {{ chunk.quality_flags.join(', ') }}
@@ -98,6 +169,7 @@ watch(
   border-radius: 10px;
   padding: 12px;
   margin-bottom: 12px;
+  scroll-margin-top: 12px;
 }
 
 .chunk-head {
@@ -131,6 +203,19 @@ watch(
   margin: 0 0 8px;
   font-size: 13px;
   color: #4b5563;
+}
+
+.summary {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.labels {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #2563eb;
 }
 
 .content {

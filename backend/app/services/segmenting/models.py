@@ -22,6 +22,7 @@ class SegmentConfig:
     include_heading_in_content: bool = True
     enable_semantic_boundary: bool = True
     semantic_boundary_threshold: float = 0.72
+    keyword_strategy: str = "jieba_tfidf"
 
 
 @dataclass
@@ -50,7 +51,7 @@ class Chunk:
     source_refs: list[dict[str, Any]]
     strategy_info: dict[str, Any]
     quality_flags: list[str] = field(default_factory=list)
-    label: str = ""
+    label: list[str] = field(default_factory=list)
     summary: str = ""
     entity_tags: list[str] = field(default_factory=list)
     backlink: dict[str, Any] = field(default_factory=dict)
