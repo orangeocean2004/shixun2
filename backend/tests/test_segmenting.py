@@ -5,6 +5,7 @@ from pathlib import Path
 
 from backend.app.services.document_loader import load_document
 from backend.app.services.segmenter import SegmentConfig, segment_blocks, segment_text
+from backend.app.services.segmenting.parser import parse_plain_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -73,6 +74,55 @@ class SegmentingSmokeTest(unittest.TestCase):
         self.assertEqual(result["strategy"]["keyword_strategy"], "jieba_freq")
         self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
         self.assertTrue(all(isinstance(chunk["label"], list) and chunk["label"] for chunk in result["chunks"]))
+
+    def test_markdown_table_is_detected(self) -> None:
+        text = """
+# 标题
+
+| 指标 | 数值 |
+| --- | ---: |
+| 准确率 | 92% |
+""".strip()
+        blocks = parse_plain_text(text)
+        self.assertTrue(any(block.block_type == "table" for block in blocks))
+
+    def test_pipe_text_not_misdetected_as_table(self) -> None:
+        text = "A | B | C 只是普通描述，不是 markdown 表格"
+        blocks = parse_plain_text(text)
+        self.assertTrue(blocks)
+        self.assertEqual(blocks[0].block_type, "paragraph")
+
+    def test_markdown_image_is_detected(self) -> None:
+        text = """
+这里是说明。
+
+![系统架构图](https://example.com/arch.png "arch")
+""".strip()
+        blocks = parse_plain_text(text)
+        self.assertTrue(any(block.block_type == "image" for block in blocks))
+
+    def test_html_image_is_detected(self) -> None:
+        text = "<img src=\"https://example.com/arch.png\" alt=\"arch\"/>"
+        blocks = parse_plain_text(text)
+        self.assertTrue(any(block.block_type == "image" for block in blocks))
+
+    def test_segmenting_adds_contains_image_flag(self) -> None:
+        text = """
+## 方案
+
+![图示](https://example.com/pic.png)
+
+系统支持图文混排。
+""".strip()
+        result = segment_text(text, doc_id="image_case")
+
+        self.assertTrue(any("contains_image" in chunk["quality_flags"] for chunk in result["chunks"]))
+        self.assertTrue(
+            any(
+                any(ref["block_type"] == "image" for ref in chunk["source_refs"])
+                for chunk in result["chunks"]
+            )
+        )
 
 
 if __name__ == "__main__":

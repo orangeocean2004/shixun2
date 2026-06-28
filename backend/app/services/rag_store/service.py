@@ -142,19 +142,22 @@ def ingest_document(
             os.remove(temp_path)
 
 
-def retrieve_chunks(doc_id: str, question: str, top_k: int) -> dict[str, Any]:
+def retrieve_chunks(doc_id: str | None, question: str, top_k: int) -> dict[str, Any]:
     if not question.strip():
         raise RAGValidationError("question 不能为空")
     if top_k <= 0:
         raise RAGValidationError("top_k 必须大于 0")
 
-    document = get_document(doc_id)
-    if not document:
-        raise RAGDocumentNotFoundError("未找到对应 doc_id")
-    if document["status"] != "ready":
-        raise RAGDocumentNotReadyError(f"文档当前状态为 {document['status']}，暂不可检索")
+    normalized_doc_id = (doc_id or "").strip() or None
+    effective_doc_id: str | None = normalized_doc_id
+    if normalized_doc_id:
+        document = get_document(normalized_doc_id)
+        if not document:
+            effective_doc_id = None
+        elif document["status"] != "ready":
+            raise RAGDocumentNotReadyError(f"文档当前状态为 {document['status']}，暂不可检索")
 
-    hits = query_chunks(doc_id=doc_id, question=question, top_k=top_k)
+    hits = query_chunks(doc_id=effective_doc_id, question=question, top_k=top_k)
     chunk_ids = [hit["chunk_id"] for hit in hits]
     chunk_map = get_chunks_by_ids(chunk_ids)
 
@@ -168,7 +171,7 @@ def retrieve_chunks(doc_id: str, question: str, top_k: int) -> dict[str, Any]:
         ordered_chunks.append(enriched_chunk)
 
     return {
-        "doc_id": doc_id,
+        "doc_id": effective_doc_id,
         "question": question,
         "top_k": top_k,
         "chunks": ordered_chunks,

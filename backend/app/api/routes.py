@@ -113,7 +113,7 @@ def query_retrieved_chunks(payload: QueryRequest) -> QueryResponse:
     try:
         top_k = payload.top_k if payload.top_k > 0 else DEFAULT_RETRIEVE_TOP_K
         result = retrieve_chunks(
-            doc_id=payload.doc_id.strip(),
+            doc_id=payload.doc_id,
             question=payload.question,
             top_k=top_k,
         )
