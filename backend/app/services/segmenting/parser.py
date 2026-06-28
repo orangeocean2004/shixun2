@@ -5,6 +5,11 @@ import re
 from .heading import is_heading
 from .models import DocumentBlock
 
+MARKDOWN_IMAGE_INLINE_PATTERN = re.compile(r"!\[[^\]]*\]\([^\)]+\)")
+MARKDOWN_IMAGE_REFERENCE_PATTERN = re.compile(r"!\[[^\]]*\]\[[^\]]+\]")
+MARKDOWN_IMAGE_HTML_PATTERN = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+MARKDOWN_TABLE_SEPARATOR_CELL_PATTERN = re.compile(r"^:?-{3,}:?$")
+
 
 def parse_plain_text(text: str) -> list[DocumentBlock]:
     """把纯文本解析成 DocumentBlock 列表。
@@ -93,6 +98,13 @@ def split_text_into_blocks(text: str) -> list[str]:
             pending_bullet = ""
             continue
 
+        if looks_like_markdown_image_line(line):
+            flush_table(table_lines, blocks)
+            flush_paragraph(paragraph_lines, blocks)
+            blocks.append(line)
+            pending_bullet = ""
+            continue
+
         if looks_like_table_line(line):
             flush_paragraph(paragraph_lines, blocks)
             table_lines.append(line)
@@ -156,17 +168,27 @@ def is_bullet_marker(line: str) -> bool:
 def looks_like_table_line(line: str) -> bool:
     """识别 Markdown 表格的一行。"""
 
-    return "|" in line and line.count("|") >= 2
+    cells = split_markdown_table_cells(line)
+    if len(cells) < 2:
+        return False
+
+    if is_markdown_table_separator_row(line):
+        return True
+
+    non_empty_cells = [cell for cell in cells if cell.strip()]
+    return len(non_empty_cells) >= 2
 
 
 def detect_block_type(text: str) -> str:
     """识别文本块类型。
 
-    先区分标题、表格、公式、代码和普通段落，分段时会对特殊块做保护。
+    先区分标题、图片、表格、公式、代码和普通段落，分段时会对特殊块做保护。
     """
 
     if is_heading(text):
         return "heading"
+    if looks_like_markdown_image_block(text):
+        return "image"
     if looks_like_table(text):
         return "table"
     if text.startswith("```") or text.endswith("```"):
@@ -177,11 +199,31 @@ def detect_block_type(text: str) -> str:
 
 
 def looks_like_table(text: str) -> bool:
-    """粗略识别 Markdown 表格。"""
+    """识别 Markdown 表格。"""
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    pipe_lines = [line for line in lines if "|" in line]
-    return len(pipe_lines) >= 2
+    if len(lines) < 2:
+        return False
+
+    for index in range(1, len(lines)):
+        separator = lines[index]
+        if not is_markdown_table_separator_row(separator):
+            continue
+
+        header = lines[index - 1]
+        header_cells = split_markdown_table_cells(header)
+        separator_cells = split_markdown_table_cells(separator)
+        if len(header_cells) < 2 or len(separator_cells) != len(header_cells):
+            continue
+
+        return True
+
+    table_like_lines = [line for line in lines if looks_like_table_line(line)]
+    if len(table_like_lines) < 2:
+        return False
+
+    cell_counts = [len(split_markdown_table_cells(line)) for line in table_like_lines]
+    return all(count == cell_counts[0] for count in cell_counts)
 
 
 def looks_like_formula(text: str) -> bool:
@@ -193,3 +235,37 @@ def looks_like_formula(text: str) -> bool:
     if "\n" in stripped or len(stripped) > 160:
         return False
     return bool(re.search(r"[=≈≤≥]\s*[\w\d({\[]", stripped))
+
+
+def split_markdown_table_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+def is_markdown_table_separator_row(line: str) -> bool:
+    cells = split_markdown_table_cells(line)
+    if len(cells) < 2:
+        return False
+    return all(MARKDOWN_TABLE_SEPARATOR_CELL_PATTERN.match(cell or "") for cell in cells)
+
+
+def looks_like_markdown_image_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    return bool(
+        MARKDOWN_IMAGE_INLINE_PATTERN.search(stripped)
+        or MARKDOWN_IMAGE_REFERENCE_PATTERN.search(stripped)
+        or MARKDOWN_IMAGE_HTML_PATTERN.search(stripped)
+    )
+
+
+def looks_like_markdown_image_block(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    return all(looks_like_markdown_image_line(line) for line in lines)

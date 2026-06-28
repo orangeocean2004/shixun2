@@ -67,14 +67,17 @@ def upsert_chunks(doc_id: str, chunks: list[dict[str, Any]]) -> None:
     collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
 
 
-def query_chunks(doc_id: str, question: str, top_k: int) -> list[dict[str, Any]]:
+def query_chunks(doc_id: str | None, question: str, top_k: int) -> list[dict[str, Any]]:
     collection = _get_collection()
-    result = collection.query(
-        query_texts=[question],
-        n_results=top_k,
-        where={"doc_id": doc_id},
-        include=["distances", "metadatas", "documents"],
-    )
+    query_kwargs: dict[str, Any] = {
+        "query_texts": [question],
+        "n_results": top_k,
+        "include": ["distances", "metadatas", "documents"],
+    }
+    if doc_id:
+        query_kwargs["where"] = {"doc_id": doc_id}
+
+    result = collection.query(**query_kwargs)
 
     ids = (result.get("ids") or [[]])[0]
     distances = (result.get("distances") or [[]])[0]

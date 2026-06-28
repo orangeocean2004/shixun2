@@ -89,6 +89,13 @@ function switchTab(tab) {
   activeTab.value = tab
 }
 
+function scrollToTop() {
+  window.scrollTo({
+    top: 0,
+    behavior: 'smooth',
+  })
+}
+
 function jumpToChunk(chunkId, target = 'result') {
   if (target === 'qa') {
     qaChunkListRef.value?.scrollToChunk(chunkId)
@@ -190,7 +197,10 @@ function handleSubmit(payload) {
 
       <section v-if="hasResult" class="result-layout">
         <aside class="panel catalog-panel">
-          <h2>目录</h2>
+          <div class="catalog-head">
+            <h2>目录</h2>
+            <button type="button" class="top-btn" @click="scrollToTop">回到顶部</button>
+          </div>
           <div class="catalog-list">
             <button
               v-for="chunk in state.result.chunks"
@@ -265,10 +275,15 @@ function handleSubmit(payload) {
 }
 
 .panel {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
-  background: #fff;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.panel:hover {
+  border-color: var(--border-strong);
 }
 
 .tabs-panel {
@@ -284,7 +299,7 @@ function handleSubmit(payload) {
 .tabs-hint {
   margin: 8px 0 0;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .result-tab {
@@ -307,8 +322,32 @@ function handleSubmit(payload) {
   overflow: auto;
 }
 
+.catalog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .catalog-panel h2 {
-  margin: 0 0 10px;
+  margin: 0;
+}
+
+.top-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface-2);
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.top-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--accent-soft);
 }
 
 .catalog-list {
@@ -320,10 +359,10 @@ function handleSubmit(payload) {
 .catalog-item {
   width: 100%;
   text-align: left;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
-  color: #374151;
+  background: var(--bg-surface-2);
+  color: var(--text-secondary);
   font-size: 13px;
   padding: 8px 10px;
   cursor: pointer;
@@ -332,10 +371,15 @@ function handleSubmit(payload) {
   text-overflow: ellipsis;
 }
 
+.catalog-item:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
 .catalog-item.active {
-  border-color: #2563eb;
-  color: #1d4ed8;
-  background: #eff6ff;
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--accent-soft);
 }
 
 .result-main {
@@ -346,19 +390,29 @@ function handleSubmit(payload) {
 }
 
 .tab-btn {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--bg-surface-2);
   padding: 8px 12px;
   font-size: 14px;
-  color: #374151;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
+.tab-btn:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
 .tab-btn.active {
-  border-color: #2563eb;
-  color: #1d4ed8;
-  background: #eff6ff;
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--accent-soft);
+}
+
+.tab-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.985);
 }
 
 .tab-btn:disabled {
@@ -378,10 +432,21 @@ function handleSubmit(payload) {
 }
 
 .qa-form input {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 14px;
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+}
+
+.qa-form input::placeholder {
+  color: var(--text-muted);
+}
+
+.qa-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(51, 199, 155, 0.2);
 }
 
 .inline-error {
@@ -395,23 +460,29 @@ function handleSubmit(payload) {
 }
 
 .qa-item {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px;
   display: flex;
   justify-content: space-between;
   gap: 10px;
+  background: var(--bg-surface-2);
+}
+
+.qa-item:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
 }
 
 .qa-labels {
   margin: 6px 0 0;
-  color: #2563eb;
+  color: var(--accent);
   font-size: 12px;
 }
 
 .qa-snippet {
   margin: 6px 0 0;
-  color: #4b5563;
+  color: var(--text-secondary);
   font-size: 13px;
   max-width: 620px;
 }
@@ -424,13 +495,13 @@ function handleSubmit(payload) {
 
 .empty {
   margin: 0;
-  color: #6b7280;
+  color: var(--text-muted);
 }
 
 .raw-json {
   margin: 0;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-code);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px;
   overflow: auto;
@@ -438,44 +509,63 @@ function handleSubmit(payload) {
 }
 
 .highlighted-json {
-  background: #111827;
-  border-color: #1f2937;
-  color: #d1d5db;
+  background: var(--bg-code);
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
   line-height: 1.55;
 }
 
 .highlighted-json :deep(.json-key) {
-  color: #93c5fd;
+  color: var(--warning);
 }
 
 .highlighted-json :deep(.json-string) {
-  color: #86efac;
+  color: #6fe1bc;
 }
 
 .highlighted-json :deep(.json-number) {
-  color: #fca5a5;
+  color: #f0a872;
 }
 
 .highlighted-json :deep(.json-boolean) {
-  color: #fcd34d;
+  color: #9fdc7c;
 }
 
 .highlighted-json :deep(.json-null) {
-  color: #c4b5fd;
+  color: var(--danger);
 }
 
 .loading {
   margin: 0;
-  color: #1d4ed8;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loading::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(51, 199, 155, 0.35);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .error {
   margin: 0;
-  color: #dc2626;
-  background: #fee2e2;
-  border: 1px solid #fecaca;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid rgba(230, 127, 104, 0.5);
   border-radius: 8px;
   padding: 10px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 960px) {
@@ -490,6 +580,10 @@ function handleSubmit(payload) {
 
   .qa-form {
     grid-template-columns: 1fr;
+  }
+
+  .qa-item {
+    flex-direction: column;
   }
 }
 </style>

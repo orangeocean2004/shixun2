@@ -94,6 +94,8 @@ def finalize_chunks(
             quality_flags.append("missing_source_ref")
         if candidate["chunk_type"] in {"table", "formula", "code"}:
             quality_flags.append(f'contains_{candidate["chunk_type"]}')
+        if any(block.block_type == "image" for block in candidate["source_blocks"]):
+            quality_flags.append("contains_image")
 
         strategy_info = dict(candidate["strategy_info"])
         strategy_info["enrichment"] = "deterministic_v1"

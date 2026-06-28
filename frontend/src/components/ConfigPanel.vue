@@ -76,10 +76,11 @@ function onSubmit() {
 
 <style scoped>
 .panel {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
-  background: #fff;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
 }
 
 .grid {
@@ -94,26 +95,48 @@ label {
   flex-direction: column;
   gap: 6px;
   font-size: 14px;
-  color: #374151;
+  color: var(--text-secondary);
 }
 
 input {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px;
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+}
+
+input::placeholder {
+  color: var(--text-muted);
+}
+
+input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(51, 199, 155, 0.2);
 }
 
 .btn {
-  border: none;
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: #2563eb;
-  color: #fff;
+  background: var(--accent);
+  color: #0e1715;
   padding: 10px 14px;
   cursor: pointer;
+  font-weight: 600;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--accent-strong);
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.985);
 }
 
 .btn:disabled {
-  background: #9ca3af;
+  background: #5a6762;
+  color: #b4beb9;
   cursor: not-allowed;
 }
 </style>

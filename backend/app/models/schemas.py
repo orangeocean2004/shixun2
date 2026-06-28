@@ -34,13 +34,13 @@ class SegmentUploadResponse(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    doc_id: str
+    doc_id: str | None = None
     question: str
     top_k: int = 5
 
 
 class QueryResponse(BaseModel):
-    doc_id: str
+    doc_id: str | None = None
     question: str
     top_k: int
     chunks: list[RetrievedChunk]

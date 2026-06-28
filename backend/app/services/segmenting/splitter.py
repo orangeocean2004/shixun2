@@ -9,6 +9,7 @@ from .models import CandidateChunk, DocumentBlock, SegmentConfig
 
 SENTENCE_PATTERN = re.compile(r"[^。！？!?；;.\n]+[。！？!?；;.]?")
 TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\s]")
+PROTECTED_BLOCK_TYPES = {"table", "formula", "code"}
 
 
 def build_candidate_chunks(
@@ -104,7 +105,7 @@ def split_oversized_chunks(
 
     result: list[CandidateChunk] = []
     for candidate in candidates:
-        if candidate["chunk_type"] in {"table", "formula", "code"}:
+        if candidate["chunk_type"] in PROTECTED_BLOCK_TYPES:
             result.append(candidate)
             continue
         if candidate["char_count"] <= config.max_chars and candidate["token_count"] <= config.max_tokens:
@@ -154,7 +155,7 @@ def merge_short_chunks(
 
         while look_ahead < len(candidates):
             next_candidate = candidates[look_ahead]
-            if next_candidate["chunk_type"] in {"table", "formula", "code"}:
+            if next_candidate["chunk_type"] in PROTECTED_BLOCK_TYPES:
                 break
             if not can_merge_chunks(pending, next_candidate, config):
                 break
@@ -174,7 +175,7 @@ def merge_short_chunks(
 def is_protected_block(block: DocumentBlock) -> bool:
     """特殊结构块需要尽量整体保留。"""
 
-    return block.block_type in {"table", "formula", "code"}
+    return block.block_type in PROTECTED_BLOCK_TYPES
 
 
 def is_heading_only(blocks: list[DocumentBlock]) -> bool:
@@ -465,7 +466,7 @@ def absorb_trailing_short_chunks(chunks: list[CandidateChunk], config: SegmentCo
     while len(merged) >= 2:
         last = merged[-1]
         prev = merged[-2]
-        if last["chunk_type"] in {"table", "formula", "code"}:
+        if last["chunk_type"] in PROTECTED_BLOCK_TYPES:
             break
         if last["char_count"] >= config.min_chars and last["token_count"] >= config.min_tokens:
             break

@@ -121,25 +121,28 @@ watch(
         </button>
       </div>
 
-      <div v-if="!isCollapsed(chunk.chunk_id)">
-        <p v-if="chunk.title_path?.length" class="title-path">title_path: {{ chunk.title_path.join(' > ') }}</p>
-        <p v-if="getChunkSummary(chunk)" class="summary">summary: {{ getChunkSummary(chunk) }}</p>
-        <p v-if="getChunkLabels(chunk).length" class="labels">labels: {{ getChunkLabels(chunk).join(', ') }}</p>
-        <pre class="content">{{ chunk.content }}</pre>
-        <p v-if="chunk.quality_flags?.length" class="flags">
-          quality_flags: {{ chunk.quality_flags.join(', ') }}
-        </p>
-      </div>
+      <Transition name="chunk-collapse">
+        <div v-if="!isCollapsed(chunk.chunk_id)">
+          <p v-if="chunk.title_path?.length" class="title-path">title_path: {{ chunk.title_path.join(' > ') }}</p>
+          <p v-if="getChunkSummary(chunk)" class="summary">summary: {{ getChunkSummary(chunk) }}</p>
+          <p v-if="getChunkLabels(chunk).length" class="labels">labels: {{ getChunkLabels(chunk).join(', ') }}</p>
+          <pre class="content">{{ chunk.content }}</pre>
+          <p v-if="chunk.quality_flags?.length" class="flags">
+            quality_flags: {{ chunk.quality_flags.join(', ') }}
+          </p>
+        </div>
+      </Transition>
     </article>
   </section>
 </template>
 
 <style scoped>
 .panel {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
-  background: #fff;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
 }
 
 .panel-head {
@@ -155,21 +158,32 @@ watch(
 }
 
 .bulk-btn {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
-  color: #374151;
+  background: var(--bg-surface-2);
+  color: var(--text-secondary);
   font-size: 12px;
   padding: 6px 10px;
   cursor: pointer;
 }
 
+.bulk-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
 .chunk-card {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
   margin-bottom: 12px;
   scroll-margin-top: 12px;
+  background: var(--bg-surface-2);
+}
+
+.chunk-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
 }
 
 .chunk-head {
@@ -185,37 +199,42 @@ watch(
   gap: 10px;
   flex-wrap: wrap;
   font-size: 13px;
-  color: #374151;
+  color: var(--text-secondary);
 }
 
 .toggle-btn {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
-  color: #374151;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   font-size: 12px;
   padding: 4px 10px;
   cursor: pointer;
   flex-shrink: 0;
 }
 
+.toggle-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
 .title-path {
   margin: 0 0 8px;
   font-size: 13px;
-  color: #4b5563;
+  color: var(--text-muted);
 }
 
 .summary {
   margin: 0 0 8px;
   font-size: 13px;
-  color: #374151;
+  color: var(--text-secondary);
   line-height: 1.5;
 }
 
 .labels {
   margin: 0 0 8px;
   font-size: 12px;
-  color: #2563eb;
+  color: var(--accent);
 }
 
 .content {
@@ -223,15 +242,27 @@ watch(
   white-space: pre-wrap;
   line-height: 1.5;
   font-size: 14px;
-  background: #f9fafb;
+  background: rgba(255, 255, 255, 0.02);
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   padding: 10px;
+  color: var(--text-primary);
 }
 
 .flags {
   margin-top: 8px;
   font-size: 12px;
-  color: #b45309;
+  color: var(--warning);
+}
+
+.chunk-collapse-enter-active,
+.chunk-collapse-leave-active {
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.chunk-collapse-enter-from,
+.chunk-collapse-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 </style>

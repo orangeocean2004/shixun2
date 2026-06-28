@@ -30,10 +30,11 @@ const props = defineProps({
 
 <style scoped>
 .panel {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
-  background: #fff;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
 }
 
 .metrics {
@@ -44,24 +45,35 @@ const props = defineProps({
 }
 
 .metric-item {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 5px;
+  background: var(--bg-surface-2);
+}
+
+.metric-item:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
 }
 
 .metric-item span {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
+}
+
+.metric-item strong {
+  color: var(--text-primary);
 }
 
 pre {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-code);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px;
   overflow-x: auto;
+  color: var(--text-secondary);
 }
 </style>
