@@ -3,8 +3,8 @@ import { computed, ref } from 'vue'
 
 const themes = [
   {
-    key: 'mint',
-    label: '薄荷绿',
+    key: 'blue',
+    label: '深空蓝',
   },
   {
     key: 'amber',
@@ -46,22 +46,22 @@ function toggleTheme() {
 <style scoped>
 :global(body) {
   margin: 0;
-  background: #0d1110;
+  background: #171c25;
 }
 
 .app-shell {
-  --bg-page: #0d1110;
-  --bg-surface: #151a18;
-  --bg-surface-2: #1d2522;
-  --bg-code: #121614;
-  --border: #2a3531;
-  --border-strong: #3a4742;
-  --text-primary: #e5ece8;
-  --text-secondary: #a7b2ad;
-  --text-muted: #7e8a84;
-  --accent-rgb: 51, 199, 155;
-  --accent: #33c79b;
-  --accent-strong: #27ad86;
+  --bg-page: #171c25;
+  --bg-surface: #202734;
+  --bg-surface-2: #283142;
+  --bg-code: #1d2532;
+  --border: #3a4558;
+  --border-strong: #4a5870;
+  --text-primary: #e8eef8;
+  --text-secondary: #b1bdd0;
+  --text-muted: #8f9cb2;
+  --accent-rgb: 66, 133, 244;
+  --accent: #4285f4;
+  --accent-strong: #2f6fda;
   --accent-soft: rgba(var(--accent-rgb), 0.16);
   --danger: #e67f68;
   --danger-soft: rgba(230, 127, 104, 0.16);
@@ -115,19 +115,23 @@ function toggleTheme() {
 }
 
 .theme-btn {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
   border-radius: 999px;
-  background: var(--bg-surface-2);
-  color: var(--text-secondary);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.34), rgba(var(--accent-rgb), 0.18));
+  color: #f5f9ff;
   font-size: 12px;
+  font-weight: 600;
   padding: 6px 12px;
   cursor: pointer;
+  box-shadow: 0 8px 18px rgba(var(--accent-rgb), 0.22);
 }
 
 .theme-btn:hover {
   border-color: var(--accent);
-  color: var(--text-primary);
-  background: var(--accent-soft);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.46), rgba(var(--accent-rgb), 0.25));
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(var(--accent-rgb), 0.3);
 }
 
 .theme-btn:active {

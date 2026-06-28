@@ -120,12 +120,7 @@ async function runQuery() {
   qaError.value = ''
   qaRetrievedChunks.value = []
 
-  const docId = qaDocId.value.trim() || state.result?.doc_id
   const question = qaQuestion.value.trim()
-  if (!docId) {
-    qaError.value = '请先上传文档或填写 doc_id。'
-    return
-  }
   if (!question) {
     qaError.value = '请输入问题。'
     return
@@ -134,10 +129,9 @@ async function runQuery() {
   qaLoading.value = true
   try {
     const response = await queryRetrievedChunks({
-      docId,
       question,
     })
-    qaDocId.value = response.doc_id || docId
+    qaDocId.value = response.doc_id || qaDocId.value
     qaRetrievedChunks.value = response.chunks || []
   } catch (error) {
     qaError.value = error?.message || '检索失败，请稍后重试。'
@@ -229,7 +223,6 @@ function handleSubmit(payload) {
     <section v-else-if="activeTab === 'qa'" class="panel qa-panel">
       <h2>问答检索</h2>
       <div class="qa-form">
-        <input v-model="qaDocId" type="text" placeholder="doc_id（可选，默认使用上传结果）" />
         <input v-model="qaQuestion" type="text" placeholder="输入问题，例如：这份文档的核心结论是什么？" @keydown.enter="runQuery" />
         <button type="button" class="tab-btn" :disabled="qaLoading" @click="runQuery">
           {{ qaLoading ? '检索中...' : '提交问题' }}
@@ -335,19 +328,23 @@ function handleSubmit(payload) {
 }
 
 .top-btn {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
   border-radius: 8px;
-  background: var(--bg-surface-2);
-  color: var(--text-secondary);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.34), rgba(var(--accent-rgb), 0.18));
+  color: #f5f9ff;
   font-size: 12px;
+  font-weight: 600;
   padding: 4px 8px;
   cursor: pointer;
+  box-shadow: 0 8px 18px rgba(var(--accent-rgb), 0.2);
 }
 
 .top-btn:hover {
   border-color: var(--accent);
-  color: var(--text-primary);
-  background: var(--accent-soft);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.45), rgba(var(--accent-rgb), 0.24));
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(var(--accent-rgb), 0.28);
 }
 
 .catalog-list {
@@ -390,25 +387,30 @@ function handleSubmit(payload) {
 }
 
 .tab-btn {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(var(--accent-rgb), 0.38);
   border-radius: 8px;
-  background: var(--bg-surface-2);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.26), rgba(var(--accent-rgb), 0.12));
   padding: 8px 12px;
   font-size: 14px;
-  color: var(--text-secondary);
+  color: #eaf2ff;
+  font-weight: 600;
   cursor: pointer;
+  box-shadow: 0 8px 16px rgba(var(--accent-rgb), 0.16);
 }
 
 .tab-btn:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  color: var(--text-primary);
+  border-color: var(--accent);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.4), rgba(var(--accent-rgb), 0.2));
   transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(var(--accent-rgb), 0.24);
 }
 
 .tab-btn.active {
   border-color: var(--accent);
-  color: var(--text-primary);
-  background: var(--accent-soft);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.58), rgba(var(--accent-rgb), 0.32));
+  box-shadow: 0 12px 24px rgba(var(--accent-rgb), 0.3);
 }
 
 .tab-btn:active:not(:disabled) {
@@ -426,7 +428,7 @@ function handleSubmit(payload) {
 
 .qa-form {
   display: grid;
-  grid-template-columns: 1fr 2fr auto;
+  grid-template-columns: 1fr auto;
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -446,7 +448,7 @@ function handleSubmit(payload) {
 
 .qa-form input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(51, 199, 155, 0.2);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.28);
 }
 
 .inline-error {

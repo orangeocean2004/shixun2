@@ -158,18 +158,22 @@ watch(
 }
 
 .bulk-btn {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(var(--accent-rgb), 0.42);
   border-radius: 8px;
-  background: var(--bg-surface-2);
-  color: var(--text-secondary);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.32), rgba(var(--accent-rgb), 0.16));
+  color: #eef5ff;
   font-size: 12px;
+  font-weight: 600;
   padding: 6px 10px;
   cursor: pointer;
+  box-shadow: 0 8px 16px rgba(var(--accent-rgb), 0.18);
 }
 
 .bulk-btn:hover {
   border-color: var(--accent);
-  color: var(--text-primary);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.48), rgba(var(--accent-rgb), 0.24));
+  transform: translateY(-1px);
 }
 
 .chunk-card {
@@ -203,19 +207,22 @@ watch(
 }
 
 .toggle-btn {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(var(--accent-rgb), 0.38);
   border-radius: 8px;
-  background: var(--bg-surface);
-  color: var(--text-secondary);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.26), rgba(var(--accent-rgb), 0.12));
+  color: #e9f2ff;
   font-size: 12px;
+  font-weight: 600;
   padding: 4px 10px;
   cursor: pointer;
   flex-shrink: 0;
+  box-shadow: 0 8px 14px rgba(var(--accent-rgb), 0.16);
 }
 
 .toggle-btn:hover {
   border-color: var(--accent);
-  color: var(--text-primary);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.4), rgba(var(--accent-rgb), 0.2));
 }
 
 .title-path {

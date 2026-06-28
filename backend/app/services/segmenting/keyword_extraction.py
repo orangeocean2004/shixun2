@@ -36,7 +36,19 @@ DEFAULT_STOPWORDS = {
     "using",
 }
 
+GENERIC_KEYWORD_STOPWORDS = {
+    "chunk",
+    "label",
+    "labels",
+    "字段",
+    "内容",
+    "文档",
+    "示例",
+    "说明",
+}
+
 INVALID_TOKEN_PATTERN = re.compile(r"^[\W_]+$")
+SHORT_ASCII_TOKEN_PATTERN = re.compile(r"^[a-z]{1,2}$")
 
 
 class KeywordExtractionStrategy(Protocol):
@@ -112,6 +124,7 @@ def list_keyword_strategies() -> tuple[str, ...]:
 
 def _normalize_stopwords(stopwords: set[str] | None) -> set[str]:
     merged = set(DEFAULT_STOPWORDS)
+    merged.update(GENERIC_KEYWORD_STOPWORDS)
     if stopwords:
         merged.update(stopwords)
     return {word.lower() for word in merged if word.strip()}
@@ -123,7 +136,11 @@ def _is_valid_token(token: str, normalized_stopwords: set[str]) -> bool:
         return False
     if len(token) < 2:
         return False
+    if any(char.isdigit() for char in token):
+        return False
     if INVALID_TOKEN_PATTERN.match(token):
+        return False
+    if SHORT_ASCII_TOKEN_PATTERN.match(lowered):
         return False
     return True
 

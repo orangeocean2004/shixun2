@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from backend.app.core.config import (
+    DEFAULT_RETRIEVE_CANDIDATE_MULTIPLIER,
+    DEFAULT_RETRIEVE_MIN_CANDIDATES,
+    RETRIEVE_LEXICAL_WEIGHT,
+    RETRIEVE_QUALITY_PENALTY,
+    RETRIEVE_SEMANTIC_WEIGHT,
+)
 from backend.app.services.document_loader import DocumentLoaderError, load_document
 from backend.app.services.document_preprocessor import preprocess_document_blocks
 from backend.app.services.segmenter import SegmentConfig, segment_blocks
@@ -142,40 +150,84 @@ def ingest_document(
             os.remove(temp_path)
 
 
-def retrieve_chunks(doc_id: str | None, question: str, top_k: int) -> dict[str, Any]:
-    if not question.strip():
+TOKEN_PATTERN = re.compile(r"[一-鿿A-Za-z0-9_]+")
+
+
+def retrieve_chunks(question: str, top_k: int) -> dict[str, Any]:
+    normalized_question = (question or "").strip()
+    if not normalized_question:
         raise RAGValidationError("question 不能为空")
     if top_k <= 0:
         raise RAGValidationError("top_k 必须大于 0")
 
-    normalized_doc_id = (doc_id or "").strip() or None
-    effective_doc_id: str | None = normalized_doc_id
-    if normalized_doc_id:
-        document = get_document(normalized_doc_id)
-        if not document:
-            effective_doc_id = None
-        elif document["status"] != "ready":
-            raise RAGDocumentNotReadyError(f"文档当前状态为 {document['status']}，暂不可检索")
-
-    hits = query_chunks(doc_id=effective_doc_id, question=question, top_k=top_k)
+    candidate_k = max(top_k * DEFAULT_RETRIEVE_CANDIDATE_MULTIPLIER, DEFAULT_RETRIEVE_MIN_CANDIDATES)
+    hits = query_chunks(question=normalized_question, top_k=candidate_k)
     chunk_ids = [hit["chunk_id"] for hit in hits]
     chunk_map = get_chunks_by_ids(chunk_ids)
 
-    ordered_chunks: list[dict[str, Any]] = []
+    ranked: list[dict[str, Any]] = []
     for hit in hits:
         chunk = chunk_map.get(hit["chunk_id"])
         if not chunk:
             continue
+
+        semantic_score = distance_to_score(hit.get("distance")) or 0.0
+        lexical_score = lexical_overlap_score(normalized_question, chunk)
+        quality_penalty = chunk_quality_penalty(chunk)
+        final_score = (
+            RETRIEVE_SEMANTIC_WEIGHT * semantic_score
+            + RETRIEVE_LEXICAL_WEIGHT * lexical_score
+            - quality_penalty
+        )
+
         enriched_chunk = dict(chunk)
-        enriched_chunk["score"] = distance_to_score(hit.get("distance"))
-        ordered_chunks.append(enriched_chunk)
+        enriched_chunk["score"] = round(final_score, 6)
+        enriched_chunk["semantic_score"] = round(semantic_score, 6)
+        enriched_chunk["lexical_score"] = round(lexical_score, 6)
+        ranked.append(enriched_chunk)
+
+    ranked.sort(key=lambda item: item.get("score", 0.0), reverse=True)
 
     return {
-        "doc_id": effective_doc_id,
-        "question": question,
+        "question": normalized_question,
         "top_k": top_k,
-        "chunks": ordered_chunks,
+        "chunks": ranked[:top_k],
     }
+
+def lexical_overlap_score(question: str, chunk: dict[str, Any]) -> float:
+    query_tokens = tokenize(question)
+    if not query_tokens:
+        return 0.0
+
+    retrieval_text = "\n".join(
+        [
+            " / ".join(chunk.get("title_path", [])),
+            " ".join(chunk.get("label", [])),
+            " ".join(chunk.get("entity_tags", [])),
+            chunk.get("summary", ""),
+            chunk.get("content", ""),
+        ]
+    )
+    chunk_tokens = tokenize(retrieval_text)
+    if not chunk_tokens:
+        return 0.0
+
+    overlap = query_tokens & chunk_tokens
+    return len(overlap) / len(query_tokens)
+
+
+def chunk_quality_penalty(chunk: dict[str, Any]) -> float:
+    flags = set(chunk.get("quality_flags", []))
+    penalty = 0.0
+    if "undersized" in flags:
+        penalty += RETRIEVE_QUALITY_PENALTY
+    if "oversized" in flags:
+        penalty += RETRIEVE_QUALITY_PENALTY
+    return penalty
+
+
+def tokenize(text: str) -> set[str]:
+    return {token.lower() for token in TOKEN_PATTERN.findall(text or "") if token.strip()}
 
 
 def list_all_chunks(doc_id: str) -> dict[str, Any]:
