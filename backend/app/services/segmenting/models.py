@@ -50,6 +50,10 @@ class Chunk:
     source_refs: list[dict[str, Any]]
     strategy_info: dict[str, Any]
     quality_flags: list[str] = field(default_factory=list)
+    label: str = ""
+    summary: str = ""
+    entity_tags: list[str] = field(default_factory=list)
+    backlink: dict[str, Any] = field(default_factory=dict)
 
 
 CandidateChunk = dict[str, Any]
