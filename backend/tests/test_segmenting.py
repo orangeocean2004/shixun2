@@ -26,6 +26,9 @@ class SegmentingSmokeTest(unittest.TestCase):
 
         for chunk in result["chunks"]:
             self.assertIn("label", chunk)
+            self.assertIsInstance(chunk["label"], list)
+            self.assertTrue(chunk["label"])
+            self.assertTrue(all(isinstance(label, str) for label in chunk["label"]))
             self.assertIn("summary", chunk)
             self.assertIn("entity_tags", chunk)
             self.assertIn("backlink", chunk)
@@ -47,6 +50,9 @@ class SegmentingSmokeTest(unittest.TestCase):
 
         for chunk in result["chunks"]:
             self.assertIn("label", chunk)
+            self.assertIsInstance(chunk["label"], list)
+            self.assertTrue(chunk["label"])
+            self.assertTrue(all(isinstance(label, str) for label in chunk["label"]))
             self.assertIn("summary", chunk)
             self.assertIn("entity_tags", chunk)
             self.assertIn("backlink", chunk)
@@ -66,7 +72,7 @@ class SegmentingSmokeTest(unittest.TestCase):
 
         self.assertEqual(result["strategy"]["keyword_strategy"], "jieba_freq")
         self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
-        self.assertTrue(all(chunk["label"] for chunk in result["chunks"]))
+        self.assertTrue(all(isinstance(chunk["label"], list) and chunk["label"] for chunk in result["chunks"]))
 
 
 if __name__ == "__main__":

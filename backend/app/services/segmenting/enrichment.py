@@ -34,15 +34,11 @@ def build_label(
     chunk_type: str,
     content: str,
     keyword_strategy: KeywordExtractionStrategy | None = None,
-) -> str:
-    for title in reversed(title_path):
-        if title and title.strip():
-            return title.strip()
-
-    keywords = _top_keywords(content, top_k=1, keyword_strategy=keyword_strategy)
-    if keywords:
-        return f"{chunk_type}-{keywords[0]}"
-    return chunk_type
+) -> list[str]:
+    _ = title_path
+    keywords = _top_keywords(content, top_k=3, keyword_strategy=keyword_strategy)
+    labels = _dedupe_keep_order([chunk_type, *keywords])
+    return labels or [chunk_type]
 
 
 def build_summary(content: str, max_chars: int = 120) -> str:

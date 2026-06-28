@@ -54,16 +54,16 @@ class KeywordExtractionTest(unittest.TestCase):
             content="这是一个没有标题的片段",
             keyword_strategy=_FakeKeywordStrategy(),
         )
-        self.assertEqual(label, "paragraph-自定义词")
+        self.assertEqual(label, ["paragraph", "自定义词"])
 
-    def test_build_label_prefers_title(self) -> None:
+    def test_build_label_ignores_title_path(self) -> None:
         label = build_label(
             title_path=["章节A"],
             chunk_type="paragraph",
             content="内容",
             keyword_strategy=_FakeKeywordStrategy(),
         )
-        self.assertEqual(label, "章节A")
+        self.assertEqual(label, ["paragraph", "自定义词"])
 
 
 if __name__ == "__main__":

@@ -6,3 +6,4 @@ python-multipart
 langchain
 langchain-openai
 jieba>=0.42.1
+chromadb>=1.0.15
