@@ -1,0 +1,16 @@
+backend/app/services/segmenting/models.py
+  h_2dbf7784d9323e 32-33,90-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c4c8a6e2e5a217fc37395d010a9cae3312873734",
+  "prompts": {},
+  "humans": {
+    "h_2dbf7784d9323e": {
+      "author": "Gmailgy66 <gy2649263674@Gamil.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
