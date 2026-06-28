@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .enrichment import build_backlink, build_label, build_summary, extract_entity_tags
+from .keyword_extraction import get_keyword_strategy
 from .models import CandidateChunk, Chunk, DocumentBlock, SegmentConfig
 from .parser import parse_plain_text
 from .splitter import build_candidate_chunks, merge_short_chunks, split_oversized_chunks
@@ -59,6 +60,8 @@ def segment_blocks(
             "include_heading_in_content": config.include_heading_in_content,
             "enable_semantic_boundary": config.enable_semantic_boundary,
             "semantic_boundary_threshold": config.semantic_boundary_threshold,
+            "keyword_strategy": config.keyword_strategy,
+            "keyword_tokenizer": "jieba",
         },
     }
 
@@ -74,6 +77,7 @@ def finalize_chunks(
     """
 
     chunks: list[Chunk] = []
+    keyword_strategy = get_keyword_strategy(config.keyword_strategy)
 
     for index, candidate in enumerate(candidates, start=1):
         chunk_id = f"{doc_id}_chunk_{index:04d}"
@@ -93,6 +97,7 @@ def finalize_chunks(
 
         strategy_info = dict(candidate["strategy_info"])
         strategy_info["enrichment"] = "deterministic_v1"
+        strategy_info["keyword_strategy"] = config.keyword_strategy
 
         chunks.append(
             Chunk(
@@ -104,7 +109,12 @@ def finalize_chunks(
                 source_refs=source_refs,
                 strategy_info=strategy_info,
                 quality_flags=quality_flags,
-                label=build_label(candidate["title_path"], candidate["chunk_type"], content),
+                label=build_label(
+                    candidate["title_path"],
+                    candidate["chunk_type"],
+                    content,
+                    keyword_strategy=keyword_strategy,
+                ),
                 summary=build_summary(content),
                 entity_tags=extract_entity_tags(content),
                 backlink=build_backlink(doc_id, chunk_id, source_refs),

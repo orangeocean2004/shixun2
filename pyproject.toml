@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.138.1",
+    "jieba>=0.42.1",
     "pymupdf>=1.27.2.3",
     "python-multipart>=0.0.32",
     "uvicorn>=0.46.0",

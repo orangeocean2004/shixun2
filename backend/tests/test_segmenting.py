@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from backend.app.services.document_loader import load_document
-from backend.app.services.segmenter import segment_blocks, segment_text
+from backend.app.services.segmenter import SegmentConfig, segment_blocks, segment_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +21,8 @@ class SegmentingSmokeTest(unittest.TestCase):
         self.assertEqual(statistics["source_ref_complete_rate"], 1.0)
         self.assertGreaterEqual(statistics["target_length_hit_rate"], 1.0)
         self.assertLessEqual(statistics["chunk_count"], 4)
+        self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
+        self.assertIn(result["strategy"]["keyword_strategy"], {"jieba_tfidf", "jieba_freq"})
 
         for chunk in result["chunks"]:
             self.assertIn("label", chunk)
@@ -41,6 +43,7 @@ class SegmentingSmokeTest(unittest.TestCase):
         self.assertEqual(statistics["oversized_count"], 0)
         self.assertEqual(statistics["source_ref_complete_rate"], 1.0)
         self.assertLessEqual(statistics["chunk_count"], 20)
+        self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
 
         for chunk in result["chunks"]:
             self.assertIn("label", chunk)
@@ -52,6 +55,18 @@ class SegmentingSmokeTest(unittest.TestCase):
                 set(chunk["backlink"]["source_ref_ids"]),
                 {ref["block_id"] for ref in chunk["source_refs"]},
             )
+
+    def test_keyword_strategy_can_be_switched(self) -> None:
+        text = "分块策略和关键词算法都需要可插拔，以便后续替换底层实现。"
+        result = segment_text(
+            text,
+            doc_id="switch_case",
+            config=SegmentConfig(keyword_strategy="jieba_freq"),
+        )
+
+        self.assertEqual(result["strategy"]["keyword_strategy"], "jieba_freq")
+        self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
+        self.assertTrue(all(chunk["label"] for chunk in result["chunks"]))
 
 
 if __name__ == "__main__":

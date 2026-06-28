@@ -89,6 +89,12 @@ wheels = [
 ]
 
 [[package]]
+name = "jieba"
+version = "0.42.1"
+source = { registry = "https://bytedpypi.byted.org/simple/" }
+sdist = { url = "https://bytedpypi.byted.org/packages/jieba/jieba-0.42.1.tar.gz", hash = "sha256:055ca12f62674fafed09427f176506079bc135638a14e23e25be909131928db2" }
+
+[[package]]
 name = "pydantic"
 version = "2.13.4"
 source = { registry = "https://bytedpypi.byted.org/simple/" }
@@ -209,6 +215,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "jieba" },
     { name = "pymupdf" },
     { name = "python-multipart" },
     { name = "uvicorn" },
@@ -217,6 +224,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.138.1" },
+    { name = "jieba", specifier = ">=0.42.1" },
     { name = "pymupdf", specifier = ">=1.27.2.3" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "uvicorn", specifier = ">=0.46.0" },

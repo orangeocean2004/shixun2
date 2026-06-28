@@ -5,3 +5,4 @@ pymupdf
 python-multipart
 langchain
 langchain-openai
+jieba>=0.42.1

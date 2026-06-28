@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 
 const props = defineProps({
   chunks: {
@@ -9,6 +9,7 @@ const props = defineProps({
 })
 
 const collapsedIds = ref(new Set())
+const chunkElements = new Map()
 
 function isCollapsed(chunkId) {
   return collapsedIds.value.has(chunkId)
@@ -26,6 +27,30 @@ function collapseAll() {
   collapsedIds.value = new Set(props.chunks.map((chunk) => chunk.chunk_id))
 }
 
+function setChunkRef(chunkId, el) {
+  if (!el) {
+    chunkElements.delete(chunkId)
+    return
+  }
+  chunkElements.set(chunkId, el)
+}
+
+async function scrollToChunk(chunkId) {
+  if (!chunkId) {
+    return
+  }
+  collapsedIds.value.delete(chunkId)
+  await nextTick()
+  chunkElements.get(chunkId)?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  })
+}
+
+defineExpose({
+  scrollToChunk,
+})
+
 watch(
   () => props.chunks,
   () => {
@@ -40,7 +65,12 @@ watch(
       <h2>分段结果（{{ props.chunks.length }}）</h2>
       <button type="button" class="bulk-btn" @click="collapseAll">收起所有</button>
     </div>
-    <article v-for="chunk in props.chunks" :key="chunk.chunk_id" class="chunk-card">
+    <article
+      v-for="chunk in props.chunks"
+      :key="chunk.chunk_id"
+      :ref="(el) => setChunkRef(chunk.chunk_id, el)"
+      class="chunk-card"
+    >
       <div class="chunk-head">
         <div class="meta">
           <strong>{{ chunk.chunk_id }}</strong>
@@ -98,6 +128,7 @@ watch(
   border-radius: 10px;
   padding: 12px;
   margin-bottom: 12px;
+  scroll-margin-top: 12px;
 }
 
 .chunk-head {

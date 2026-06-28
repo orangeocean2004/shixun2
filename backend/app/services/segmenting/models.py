@@ -22,6 +22,7 @@ class SegmentConfig:
     include_heading_in_content: bool = True
     enable_semantic_boundary: bool = True
     semantic_boundary_threshold: float = 0.72
+    keyword_strategy: str = "jieba_tfidf"
 
 
 @dataclass

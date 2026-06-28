@@ -7,10 +7,23 @@ import { useChunkStore } from '../stores/chunkStore'
 
 const { state, submitUpload } = useChunkStore()
 const activeTab = ref('result')
+const activeCatalogId = ref('')
+const chunkListRef = ref(null)
 const rawResultJson = computed(() => JSON.stringify(state.result, null, 2))
+
+function getCatalogLabel(chunk) {
+  const lastTitle = chunk.title_path?.at(-1)
+  return lastTitle || chunk.chunk_id
+}
+
+function jumpToChunk(chunkId) {
+  activeCatalogId.value = chunkId
+  chunkListRef.value?.scrollToChunk(chunkId)
+}
 
 function handleSubmit(payload) {
   activeTab.value = 'result'
+  activeCatalogId.value = ''
   submitUpload(payload)
 }
 </script>
@@ -44,10 +57,28 @@ function handleSubmit(payload) {
         </div>
       </section>
 
-      <template v-if="activeTab === 'result'">
-        <MetricPanel :statistics="state.result.statistics" :strategy="state.result.strategy" />
-        <ChunkList :chunks="state.result.chunks" />
-      </template>
+      <section v-if="activeTab === 'result'" class="result-layout">
+        <aside class="panel catalog-panel">
+          <h2>目录</h2>
+          <div class="catalog-list">
+            <button
+              v-for="chunk in state.result.chunks"
+              :key="chunk.chunk_id"
+              type="button"
+              class="catalog-item"
+              :class="{ active: activeCatalogId === chunk.chunk_id }"
+              @click="jumpToChunk(chunk.chunk_id)"
+            >
+              {{ getCatalogLabel(chunk) }}
+            </button>
+          </div>
+        </aside>
+
+        <div class="result-main">
+          <MetricPanel :statistics="state.result.statistics" :strategy="state.result.strategy" />
+          <ChunkList ref="chunkListRef" :chunks="state.result.chunks" />
+        </div>
+      </section>
 
       <section v-else class="panel">
         <h2>原始 JSON 返回值</h2>
@@ -78,6 +109,58 @@ function handleSubmit(payload) {
 .tabs {
   display: flex;
   gap: 8px;
+}
+
+.result-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.catalog-panel {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+
+.catalog-panel h2 {
+  margin: 0 0 10px;
+}
+
+.catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.catalog-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  font-size: 13px;
+  padding: 8px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.catalog-item.active {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.result-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .tab-btn {
@@ -118,5 +201,16 @@ function handleSubmit(payload) {
   border: 1px solid #fecaca;
   border-radius: 8px;
   padding: 10px;
+}
+
+@media (max-width: 960px) {
+  .result-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-panel {
+    position: static;
+    max-height: none;
+  }
 }
 </style>
