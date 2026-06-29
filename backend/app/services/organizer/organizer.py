@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from backend.app.services.model_client import LLMClient, RuleBasedTagger
+from backend.app.services.organizer.model_client import LLMClient, RuleBasedTagger
 
 
 # ── Prompt templates (kept short for low-latency LLM calls) ─

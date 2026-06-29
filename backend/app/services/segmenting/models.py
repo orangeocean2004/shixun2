@@ -50,6 +50,7 @@ class Chunk:
     char_count: int
     source_refs: list[dict[str, Any]]
     strategy_info: dict[str, Any]
+    retrieval_text: str = ""
     quality_flags: list[str] = field(default_factory=list)
     label: list[str] = field(default_factory=list)
     summary: str = ""

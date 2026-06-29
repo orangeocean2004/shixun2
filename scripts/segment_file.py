@@ -11,8 +11,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.app.services.document_loader import load_document
-from backend.app.services.document_preprocessor import preprocess_document_blocks
-from backend.app.services.segmenter import SegmentConfig, segment_blocks
+from backend.app.services.preprocessing import preprocess_document_blocks
+from backend.app.services.segmenting import SegmentConfig, segment_blocks
 
 
 def parse_args() -> argparse.Namespace:

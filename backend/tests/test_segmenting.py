@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from backend.app.services.document_loader import load_document
-from backend.app.services.segmenter import SegmentConfig, segment_blocks, segment_text
+from backend.app.services.segmenting import SegmentConfig, segment_blocks, segment_text
 from backend.app.services.segmenting.parser import parse_plain_text
 
 

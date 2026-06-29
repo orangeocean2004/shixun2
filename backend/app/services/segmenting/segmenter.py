@@ -73,7 +73,8 @@ def finalize_chunks(
 ) -> list[Chunk]:
     """把候选 chunk 转成最终 Chunk。
 
-    这里负责生成稳定 chunk_id、source_refs 和 quality_flags。
+    这里负责生成稳定 chunk_id、source_refs、quality_flags，
+    以及构建检索增强文本 retrieval_text。
     """
 
     chunks: list[Chunk] = []
@@ -84,6 +85,8 @@ def finalize_chunks(
         content = candidate["content"]
         char_count = len(content)
         source_refs = build_source_refs(candidate["source_blocks"])
+        title_path = candidate["title_path"]
+        chunk_type = candidate["chunk_type"]
 
         quality_flags: list[str] = []
         if char_count > config.max_chars:
@@ -92,8 +95,8 @@ def finalize_chunks(
             quality_flags.append("undersized")
         if not candidate["source_blocks"]:
             quality_flags.append("missing_source_ref")
-        if candidate["chunk_type"] in {"table", "formula", "code"}:
-            quality_flags.append(f'contains_{candidate["chunk_type"]}')
+        if chunk_type in {"table", "formula", "code"}:
+            quality_flags.append(f"contains_{chunk_type}")
         if any(block.block_type == "image" for block in candidate["source_blocks"]):
             quality_flags.append("contains_image")
 
@@ -101,22 +104,22 @@ def finalize_chunks(
         strategy_info["enrichment"] = "deterministic_v1"
         strategy_info["keyword_strategy"] = config.keyword_strategy
 
+        # 提取标签和构建检索增强文本
+        labels = build_label(title_path, chunk_type, content, keyword_strategy=keyword_strategy)
+        retrieval_text = _build_retrieval_text(title_path, labels, content)
+
         chunks.append(
             Chunk(
                 chunk_id=chunk_id,
                 content=content,
-                title_path=candidate["title_path"],
-                chunk_type=candidate["chunk_type"],
+                retrieval_text=retrieval_text,
+                title_path=title_path,
+                chunk_type=chunk_type,
                 char_count=char_count,
                 source_refs=source_refs,
                 strategy_info=strategy_info,
                 quality_flags=quality_flags,
-                label=build_label(
-                    candidate["title_path"],
-                    candidate["chunk_type"],
-                    content,
-                    keyword_strategy=keyword_strategy,
-                ),
+                label=labels,
                 summary=build_summary(content),
                 entity_tags=extract_entity_tags(content),
                 backlink=build_backlink(doc_id, chunk_id, source_refs),
@@ -124,6 +127,32 @@ def finalize_chunks(
         )
 
     return chunks
+
+
+def _build_retrieval_text(
+    title_path: list[str],
+    labels: list[str],
+    content: str,
+) -> str:
+    """构建检索增强文本。
+
+    将标题路径、关键词标签与正文拼接，使 embedding 检索能同时
+    捕捉 chunk 的结构上下文和语义信号，弥补短 chunk 在纯文本
+    召回中的劣势。
+
+    格式：标题路径 | 关键词 | 正文
+    """
+    parts: list[str] = []
+
+    if title_path:
+        parts.append(" > ".join(title_path))
+
+    if labels:
+        parts.append("；".join(labels[:5]))
+
+    parts.append(content)
+
+    return " | ".join(parts)
 
 
 def build_source_refs(blocks: list[DocumentBlock]) -> list[dict[str, Any]]:

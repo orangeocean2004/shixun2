@@ -15,8 +15,8 @@ from backend.app.core.config import (
     RETRIEVE_SEMANTIC_WEIGHT,
 )
 from backend.app.services.document_loader import DocumentLoaderError, load_document
-from backend.app.services.document_preprocessor import preprocess_document_blocks
-from backend.app.services.segmenter import SegmentConfig, segment_blocks
+from backend.app.services.preprocessing import preprocess_document_blocks
+from backend.app.services.segmenting import SegmentConfig, segment_blocks
 
 from .chroma_store import delete_document_vectors, initialize_chroma, query_chunks, upsert_chunks
 from .sqlite_store import (
