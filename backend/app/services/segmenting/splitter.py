@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from functools import lru_cache
 from typing import Any
+
+from backend.app.services.embedding import embedding_similarity as embedding_model_similarity
 
 from .heading import heading_level, normalize_heading
 from .models import CandidateChunk, DocumentBlock, SegmentConfig
@@ -10,6 +13,10 @@ from .models import CandidateChunk, DocumentBlock, SegmentConfig
 SENTENCE_PATTERN = re.compile(r"[^。！？!?；;.\n]+[。！？!?；;.]?")
 TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\s]")
 PROTECTED_BLOCK_TYPES = {"table", "formula", "code"}
+METRIC_BLOCK_PATTERN = re.compile(
+    r"(%|≥|≤|>=|<=|Recall@|nDCG|MRR|命中率|准确率|完整率|忠实度|可答性|"
+    r"目标值|验收标准|评价指标|技术指标|不破句率|整体成块率)"
+)
 
 
 def build_candidate_chunks(
@@ -42,16 +49,23 @@ def build_candidate_chunks(
 
     for block in blocks:
         if block.block_type == "heading":
-            flush_current("heading_boundary")
+            current_text = candidate_text(current_blocks) if current_blocks else ""
+            if len(current_text) >= config.heading_flush_min_chars:
+                flush_current("heading_boundary")
             level = heading_level(block.text)
             title = normalize_heading(block.text)
             title_stack = [(item_level, item_title) for item_level, item_title in title_stack if item_level < level]
             title_stack.append((level, title))
             current_title_path = [item_title for _, item_title in title_stack]
-            current_heading_block = block
+            current_heading_block = annotate_heading_block(block, current_title_path, level, title)
             if config.include_heading_in_content:
-                current_blocks = [block]
+                if not current_blocks:
+                    current_blocks = [current_heading_block]
+                else:
+                    current_blocks.append(current_heading_block)
             continue
+
+        block = annotate_metric_block(block)
 
         if is_protected_block(block):
             flush_current("before_special_block")
@@ -85,6 +99,12 @@ def build_candidate_chunks(
 
         if not current_blocks and config.include_heading_in_content and current_heading_block is not None:
             current_blocks = [current_heading_block]
+
+        if current_blocks and not is_heading_only(current_blocks):
+            current_tokens = count_tokens(candidate_text(current_blocks))
+            block_tokens = count_tokens(block.text)
+            if current_tokens + block_tokens > config.max_tokens and current_tokens >= config.min_tokens:
+                flush_current("pre_add_token_overflow")
 
         current_blocks.append(block)
 
@@ -145,7 +165,7 @@ def merge_short_chunks(
 
     while index < len(candidates):
         current = candidates[index]
-        if is_protected_block(current["source_blocks"][0]):
+        if current["chunk_type"] in PROTECTED_BLOCK_TYPES:
             merged.append(current)
             index += 1
             continue
@@ -168,6 +188,7 @@ def merge_short_chunks(
         merged.append(pending)
         index = look_ahead
 
+    merged = rebalance_short_chunks(merged, config)
     merged = absorb_trailing_short_chunks(merged, config)
     return merged
 
@@ -193,12 +214,21 @@ def make_candidate(
 
     content = candidate_text(blocks)
     chunk_type = "normal"
-    if len(blocks) == 1 and is_protected_block(blocks[0]):
-        chunk_type = blocks[0].block_type
+    protected_types = [block.block_type for block in blocks if is_protected_block(block)]
+    if protected_types:
+        chunk_type = protected_types[-1]
+    if any(is_metric_block(block) for block in blocks):
+        chunk_type = "metric"
+
+    section_titles = extract_section_titles(blocks)
+    primary_title_path = extract_primary_title_path(blocks, title_path)
+    metric_keywords = extract_metric_keywords(content) if chunk_type == "metric" else []
 
     return {
         "content": content,
-        "title_path": list(title_path),
+        "title_path": primary_title_path,
+        "section_titles": section_titles,
+        "metric_keywords": metric_keywords,
         "chunk_type": chunk_type,
         "source_blocks": list(blocks),
         "strategy_info": {"split_reason": split_reason},
@@ -211,6 +241,118 @@ def candidate_text(blocks: list[DocumentBlock]) -> str:
     """把 block 序列拼成 chunk 文本。"""
 
     return "\n\n".join(block.text.strip() for block in blocks if block.text.strip()).strip()
+
+
+def annotate_heading_block(
+    block: DocumentBlock,
+    title_path: list[str],
+    level: int,
+    title: str,
+) -> DocumentBlock:
+    """复制标题块，并记录它进入 chunk 时的层级路径。"""
+
+    return DocumentBlock(
+        block_id=block.block_id,
+        text=block.text,
+        block_type=block.block_type,
+        page=block.page,
+        metadata={
+            **block.metadata,
+            "title_path": list(title_path),
+            "heading_level": level,
+            "normalized_heading": title,
+        },
+    )
+
+
+def annotate_metric_block(block: DocumentBlock) -> DocumentBlock:
+    """为指标/验收类内容打标，便于后续切分和检索增强。"""
+
+    if not looks_like_metric_text(block.text):
+        return block
+    return DocumentBlock(
+        block_id=block.block_id,
+        text=block.text,
+        block_type=block.block_type,
+        page=block.page,
+        metadata={**block.metadata, "metric_block": True},
+    )
+
+
+def looks_like_metric_text(text: str) -> bool:
+    """识别包含百分比、阈值或验收指标术语的文本。"""
+
+    return bool(METRIC_BLOCK_PATTERN.search(text or ""))
+
+
+def is_metric_block(block: DocumentBlock) -> bool:
+    """判断 block 是否是指标/验收类内容。"""
+
+    return bool(block.metadata.get("metric_block")) or looks_like_metric_text(block.text)
+
+
+def extract_section_titles(blocks: list[DocumentBlock]) -> list[str]:
+    """提取 chunk 内实际出现过的标题，保留多小节合并信息。"""
+
+    titles: list[str] = []
+    seen: set[str] = set()
+    for block in blocks:
+        if block.block_type != "heading":
+            continue
+        title = str(block.metadata.get("normalized_heading") or normalize_heading(block.text))
+        if title and title not in seen:
+            titles.append(title)
+            seen.add(title)
+    return titles
+
+
+def extract_primary_title_path(blocks: list[DocumentBlock], fallback: list[str]) -> list[str]:
+    """用 chunk 内容里的第一个标题路径作为主路径，避免合并后挂错标题。"""
+
+    first_path: list[str] | None = None
+    for block in blocks:
+        if block.block_type != "heading":
+            continue
+        path = block.metadata.get("title_path")
+        if isinstance(path, list) and path:
+            normalized_path = [str(item) for item in path]
+        else:
+            normalized_path = [normalize_heading(block.text)]
+        if first_path is None:
+            first_path = normalized_path
+        if len(normalized_path) > 1:
+            return normalized_path
+    return first_path or list(fallback)
+
+
+def extract_metric_keywords(text: str) -> list[str]:
+    """从指标文本中抽取适合拼入检索文本的短关键词。"""
+
+    keywords: list[str] = []
+    for pattern in (
+        r"不破句率\s*[:：]?\s*\d+%",
+        r"目标长度区间命中率\s*[:：]?\s*[≥>=\s]*\d+%",
+        r"整体成块率\s*[:：]?\s*[≥>=\s]*\d+%",
+        r"回链完整率\s*[:：]?\s*\d+%",
+        r"Recall@k\s*/\s*nDCG\s*提升\s*[≥>=\s]*\d+%",
+        r"Recall@\d+\s*[:：]?\s*[+\-]?\d+(?:\.\d+)?%",
+        r"Precision@\d+\s*[:：]?\s*[+\-]?\d+(?:\.\d+)?%",
+        r"MRR\s*[:：]?\s*[+\-]?\d+(?:\.\d+)?%",
+        r"nDCG@\d+\s*[:：]?\s*[+\-]?\d+(?:\.\d+)?%",
+    ):
+        for match in re.finditer(pattern, text):
+            value = normalize_metric_keyword(match.group(0))
+            if value and value not in keywords:
+                keywords.append(value)
+    return keywords
+
+
+def normalize_metric_keyword(value: str) -> str:
+    """把指标片段整理成更适合 embedding 的键值短句。"""
+
+    normalized = re.sub(r"\s+", " ", value.strip())
+    normalized = normalized.replace("≥", "至少").replace(">=", "至少")
+    return normalized
 
 
 def split_candidate_content(
@@ -228,33 +370,24 @@ def split_candidate_content(
         body = strip_leading_heading(body, heading_prefix)
 
     max_body_chars = available_body_chars(heading_prefix, config)
-    sentences = split_sentences_by_length(body, max_body_chars)
-    if not sentences:
-        sentences = [body]
-
-    pieces: list[dict[str, Any]] = []
-    current: list[str] = []
-
-    for sentence in sentences:
-        if current and len("".join(current)) + len(sentence) > max_body_chars:
-            pieces.append(build_piece(heading_prefix, current, source_blocks))
-            current = bounded_overlap(current, config.overlap_sentences, max_body_chars)
-            while current and len("".join(current)) + len(sentence) > max_body_chars:
-                current.pop(0)
-        current.append(sentence)
-
-    if current:
-        pieces.append(build_piece(heading_prefix, current, source_blocks))
-
+    effective_max_chars = min(max_body_chars, _token_aware_char_limit(body, config))
+    pieces = split_text_recursively(body, effective_max_chars, config)
     if not pieces:
-        pieces.append(
+        pieces = [body]
+
+    result: list[dict[str, Any]] = []
+    for piece in pieces:
+        result.append(build_piece(heading_prefix, [piece], source_blocks))
+
+    if not result:
+        result.append(
             {
                 "content": content.strip(),
                 "source_blocks": list(source_blocks),
             }
         )
 
-    return [piece for piece in pieces if piece["content"].strip()]
+    return [piece for piece in result if piece["content"].strip()]
 
 
 def build_piece(
@@ -287,19 +420,83 @@ def strip_leading_heading(content: str, heading: str) -> str:
 
 
 def split_long_text(text: str, config: SegmentConfig) -> list[str]:
-    """按句子切分超长文本，并给后续 chunk 添加少量句子 overlap。"""
+    """递归切分超长文本，并给后续 chunk 添加少量 overlap。"""
 
-    sentences = split_sentences_by_length(text, config.max_chars)
+    return split_text_recursively(text, config.max_chars, config)
+
+
+def split_text_recursively(text: str, max_chars: int, config: SegmentConfig) -> list[str]:
+    """按 RecursiveCharacterTextSplitter 的思路切分文本。"""
+
+    limit = max(1, max_chars)
+    normalized = text.strip()
+    if not normalized:
+        return []
+    if len(normalized) <= limit:
+        return [normalized]
+
+    units = recursive_split_units(normalized, limit, config.recursive_separators)
+    return merge_recursive_units(units, limit, config.overlap_sentences)
+
+
+def recursive_split_units(text: str, max_chars: int, separators: tuple[str, ...]) -> list[str]:
+    """递归拆出不超过长度上限的基础文本单元。"""
+
+    stripped = text.strip()
+    if not stripped:
+        return []
+    if len(stripped) <= max_chars:
+        return [stripped]
+
+    if not separators:
+        return split_unit_by_length(stripped, max_chars)
+
+    separator = choose_separator(stripped, separators)
+    remaining_separators = separators[separators.index(separator) + 1 :]
+
+    if separator == "":
+        return split_unit_by_length(stripped, max_chars)
+
+    raw_parts = stripped.split(separator)
+    units: list[str] = []
+    for index, raw_part in enumerate(raw_parts):
+        if not raw_part.strip():
+            continue
+        part = raw_part
+        if index < len(raw_parts) - 1:
+            part = f"{part}{separator}"
+        if len(part) > max_chars:
+            units.extend(recursive_split_units(part, max_chars, remaining_separators))
+        else:
+            units.append(part)
+    return units
+
+
+def choose_separator(text: str, separators: tuple[str, ...]) -> str:
+    """选择当前文本中可用的最粗粒度分隔符。"""
+
+    for separator in separators:
+        if separator == "" or separator in text:
+            return separator
+    return ""
+
+
+def merge_recursive_units(units: list[str], max_chars: int, overlap_count: int) -> list[str]:
+    """把递归拆出的基础单元组合成接近长度上限的 chunk。"""
+
     pieces: list[str] = []
     current: list[str] = []
 
-    for sentence in sentences:
-        if current and len("".join(current)) + len(sentence) > config.max_chars:
+    for unit in units:
+        unit = unit.strip(" \t")
+        if not unit.strip():
+            continue
+        if current and len("".join(current)) + len(unit) > max_chars:
             pieces.append("".join(current).strip())
-            current = bounded_overlap(current, config.overlap_sentences, config.max_chars)
-            while current and len("".join(current)) + len(sentence) > config.max_chars:
+            current = bounded_overlap(current, overlap_count, max_chars)
+            while current and len("".join(current)) + len(unit) > max_chars:
                 current.pop(0)
-        current.append(sentence)
+        current.append(unit)
 
     if current:
         pieces.append("".join(current).strip())
@@ -351,6 +548,21 @@ def best_split_position(text: str, limit: int) -> int:
     return limit
 
 
+def _token_aware_char_limit(text: str, config: SegmentConfig) -> int:
+    """根据文本实际 token/char 比率，估算不超过 max_tokens 的最大字符数。"""
+
+    char_count = len(text)
+    if char_count == 0:
+        return config.max_chars
+    token_count = count_tokens(text)
+    if token_count <= config.max_tokens:
+        return config.max_chars
+    ratio = token_count / char_count
+    if ratio <= 1.0:
+        return config.max_chars
+    return max(1, int(config.max_tokens / ratio * 0.95))
+
+
 def available_body_chars(heading_prefix: str, config: SegmentConfig) -> int:
     """计算带标题前缀时正文可使用的字符预算。"""
 
@@ -384,22 +596,56 @@ def should_flush_for_length_boundary(blocks: list[DocumentBlock], config: Segmen
     if not blocks:
         return False
     content = candidate_text(blocks)
-    if len(content) < config.target_chars and count_tokens(content) < config.target_tokens:
+    token_count = count_tokens(content)
+    chars_reached = len(content) >= config.target_chars
+    tokens_reached = token_count >= config.target_tokens
+    if not chars_reached and not tokens_reached:
         return False
+    if token_count >= config.max_tokens:
+        return True
     if is_heading_only(blocks):
         return False
     return True
 
 
 def should_flush_for_semantic_boundary(current_text: str, next_text: str, config: SegmentConfig) -> bool:
-    """用轻量词向量相似度判断是否应提前收束。"""
+    """用 embedding 相似度判断是否应提前收束，失败时回退词频相似度。"""
 
     if not config.enable_semantic_boundary:
         return False
     if len(current_text) < config.min_chars:
         return False
-    similarity = cosine_similarity(current_text, next_text)
+    similarity = semantic_similarity(current_text, next_text)
     return similarity < config.semantic_boundary_threshold
+
+
+def semantic_similarity(left: str, right: str) -> float:
+    """优先用 sentence-transformers embedding；不可用时回退词频余弦。"""
+
+    left = compact_for_embedding(left)
+    right = compact_for_embedding(right)
+    if not left or not right:
+        return 0.0
+    score = embedding_similarity(left, right)
+    if score is not None:
+        return score
+    return cosine_similarity(left, right)
+
+
+def compact_for_embedding(text: str, max_chars: int = 1200) -> str:
+    """限制边界判断输入长度，降低 embedding 计算成本。"""
+
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if len(compact) <= max_chars:
+        return compact
+    return compact[-max_chars:]
+
+
+@lru_cache(maxsize=2048)
+def embedding_similarity(left: str, right: str) -> float | None:
+    """计算两段短文本的 embedding 余弦相似度。"""
+
+    return embedding_model_similarity(left, right, use_fallback=False)
 
 
 def can_merge_chunks(left: CandidateChunk, right: CandidateChunk, config: SegmentConfig) -> bool:
@@ -444,11 +690,21 @@ def merge_candidates(left: CandidateChunk, right: CandidateChunk) -> CandidateCh
         merged_title_path = list(left["title_path"] or right["title_path"])
 
     content = f'{left["content"]}\n\n{right["content"]}'.strip()
+    source_blocks = left["source_blocks"] + right["source_blocks"]
+    section_titles = merge_unique(left.get("section_titles", []), right.get("section_titles", []))
+    metric_keywords = merge_unique(left.get("metric_keywords", []), right.get("metric_keywords", []))
+    if not section_titles:
+        section_titles = extract_section_titles(source_blocks)
+    if not metric_keywords and any(is_metric_block(block) for block in source_blocks):
+        metric_keywords = extract_metric_keywords(content)
+    chunk_type = "metric" if metric_keywords or any(is_metric_block(block) for block in source_blocks) else "normal"
     return {
         "content": content,
         "title_path": merged_title_path,
-        "chunk_type": "normal",
-        "source_blocks": left["source_blocks"] + right["source_blocks"],
+        "section_titles": section_titles,
+        "metric_keywords": metric_keywords,
+        "chunk_type": chunk_type,
+        "source_blocks": source_blocks,
         "strategy_info": {
             "split_reason": right["strategy_info"].get("split_reason", "merged"),
             "merge_reason": "adaptive_short_chunk_merge",
@@ -457,6 +713,98 @@ def merge_candidates(left: CandidateChunk, right: CandidateChunk) -> CandidateCh
         "char_count": len(content),
         "token_count": count_tokens(content),
     }
+
+
+def rebalance_short_chunks(
+    chunks: list[CandidateChunk],
+    config: SegmentConfig,
+) -> list[CandidateChunk]:
+    """在无法整体合并时，从前一个 chunk 匀一些句子给过短 chunk。"""
+
+    if len(chunks) < 2:
+        return chunks
+
+    result = list(chunks)
+    index = 1
+
+    while index < len(result):
+        prev = result[index - 1]
+        curr = result[index]
+
+        if prev["chunk_type"] != "normal" or curr["chunk_type"] != "normal":
+            index += 1
+            continue
+        if curr["char_count"] >= config.min_chars:
+            index += 1
+            continue
+        if prev["char_count"] <= config.min_chars:
+            index += 1
+            continue
+
+        shared = common_title_path(prev["title_path"], curr["title_path"])
+        both_empty = not prev["title_path"] and not curr["title_path"]
+        if len(shared) < 1 and not both_empty:
+            index += 1
+            continue
+
+        deficit = config.min_chars - curr["char_count"]
+        move_target = min(deficit + 80, prev["char_count"] - config.min_chars)
+        if move_target <= 0:
+            index += 1
+            continue
+
+        prev_sentences = split_sentences(prev["content"])
+        if len(prev_sentences) <= 1:
+            index += 1
+            continue
+
+        moved_chars = 0
+        moved_parts: list[str] = []
+        remaining_prev = list(prev_sentences)
+
+        while moved_chars < move_target and len(remaining_prev) > 1:
+            sentence = remaining_prev.pop().strip()
+            if not sentence:
+                continue
+            moved_parts.insert(0, sentence)
+            moved_chars += len(sentence)
+
+        if not moved_parts:
+            index += 1
+            continue
+
+        new_prev_content = "".join(remaining_prev).strip()
+        moved_content = "".join(moved_parts).strip()
+        new_curr_content = f"{moved_content}\n\n{curr['content']}".strip()
+
+        result[index - 1] = {
+            **prev,
+            "content": new_prev_content,
+            "char_count": len(new_prev_content),
+            "token_count": count_tokens(new_prev_content),
+            "strategy_info": {
+                **prev["strategy_info"],
+                "rebalanced": True,
+                "rebalance_role": "donor",
+                "chars_donated": moved_chars,
+            },
+        }
+        result[index] = {
+            **curr,
+            "content": new_curr_content,
+            "char_count": len(new_curr_content),
+            "token_count": count_tokens(new_curr_content),
+            "strategy_info": {
+                **curr["strategy_info"],
+                "rebalanced": True,
+                "rebalance_role": "recipient",
+                "chars_received": moved_chars,
+            },
+        }
+
+        index += 1
+
+    return result
 
 
 def absorb_trailing_short_chunks(chunks: list[CandidateChunk], config: SegmentConfig) -> list[CandidateChunk]:
@@ -488,6 +836,19 @@ def common_title_path(left: list[str], right: list[str]) -> list[str]:
     return shared
 
 
+def merge_unique(left: list[str], right: list[str]) -> list[str]:
+    """按原顺序合并两个短字符串列表。"""
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in left + right:
+        value = str(item).strip()
+        if value and value not in seen:
+            merged.append(value)
+            seen.add(value)
+    return merged
+
+
 def clone_block(block: DocumentBlock, text: str) -> DocumentBlock:
     """复制一个 block，但替换文本内容。"""
 
@@ -500,9 +861,33 @@ def clone_block(block: DocumentBlock, text: str) -> DocumentBlock:
     )
 
 
-def count_tokens(text: str) -> int:
-    """用轻量正则估算 token 数。"""
+_tiktoken_encoder: Any = None
 
+
+def _get_tiktoken_encoder() -> Any:
+    """延迟加载 tiktoken 编码器，失败时回退。"""
+
+    global _tiktoken_encoder
+    if _tiktoken_encoder is not None:
+        return _tiktoken_encoder
+    try:
+        import tiktoken
+
+        _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        _tiktoken_encoder = False
+    return _tiktoken_encoder
+
+
+def count_tokens(text: str) -> int:
+    """估算文本 token 数，优先使用 tiktoken，失败时用正则近似。"""
+
+    encoder = _get_tiktoken_encoder()
+    if encoder and encoder is not False:
+        try:
+            return len(encoder.encode(text or ""))
+        except Exception:
+            pass
     return len(TOKEN_PATTERN.findall(text or ""))
 
 

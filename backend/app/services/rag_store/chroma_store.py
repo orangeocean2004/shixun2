@@ -34,18 +34,25 @@ def delete_document_vectors(doc_id: str) -> None:
 
 
 def _build_retrieval_document(chunk: dict[str, Any]) -> str:
+    retrieval_text = (chunk.get("retrieval_text", "") or "").strip()
+    if retrieval_text:
+        return retrieval_text
+
     title_path = chunk.get("title_path", [])
+    section_titles = chunk.get("section_titles", [])
     label = chunk.get("label", [])
     entity_tags = chunk.get("entity_tags", [])
     summary = (chunk.get("summary", "") or "").strip()
     content = (chunk.get("content", "") or "").strip()
 
     title_text = " / ".join([item for item in title_path if isinstance(item, str) and item.strip()])
+    section_text = " / ".join([item for item in section_titles if isinstance(item, str) and item.strip()])
     label_text = ", ".join([item for item in label if isinstance(item, str) and item.strip()])
     entity_text = ", ".join([item for item in entity_tags if isinstance(item, str) and item.strip()])
 
     sections = [
         f"标题路径: {title_text}" if title_text else "",
+        f"包含小节: {section_text}" if section_text else "",
         f"标签: {label_text}" if label_text else "",
         f"实体: {entity_text}" if entity_text else "",
         f"摘要: {summary}" if summary else "",
