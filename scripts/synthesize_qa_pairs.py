@@ -45,7 +45,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.app.services.document_loader import load_document
-from backend.app.services.model_client import LLMClient
+from backend.app.services.organizer.model_client import LLMClient
 from backend.app.services.preprocessing import preprocess_document_blocks
 from backend.app.services.segmenting import SegmentConfig, segment_blocks
 

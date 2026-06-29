@@ -20,7 +20,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
-    initialize_rag_store()
+    try:
+        initialize_rag_store()
+    except Exception:
+        pass  # ChromaDB 初始化失败不影响分段功能
 
 
 app.include_router(router)

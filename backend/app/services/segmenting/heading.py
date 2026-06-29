@@ -10,6 +10,14 @@ HEADING_PATTERNS = [
     re.compile(r"^\d+(?:\.\d+){0,5}[、. ]\s*(.+)$"),
 ]
 
+# 常见英文学术标题关键词（单独成行时视为标题）
+_ENGLISH_HEADING_KEYWORDS = frozenset({
+    "abstract", "keywords", "contents", "references", "acknowledgments",
+    "acknowledgements", "introduction", "conclusion", "appendix", "summary",
+    "background", "methodology", "methods", "results", "discussion",
+    "related work", "future work", "bibliography",
+})
+
 TOC_PAGE_REF_PATTERNS = [
     re.compile(r"\t+\s*-?\s*\d+\s*-?\s*$"),
     re.compile(r"\.{2,}\s*\d+\s*$"),
@@ -21,6 +29,7 @@ def is_heading(text: str) -> bool:
     """判断一个文本块是否像标题。
 
     标题通常较短，并且符合 Markdown、中文编号或数字编号格式。
+    也识别常见英文学术标题（Abstract、Keywords 等）单独成行的情况。
     """
 
     first_line = text.strip().splitlines()[0]
@@ -28,6 +37,11 @@ def is_heading(text: str) -> bool:
         return False
     if looks_like_toc_entry(first_line):
         return False
+
+    # 常见英文学术标题单独成行
+    if first_line.lower() in _ENGLISH_HEADING_KEYWORDS:
+        return True
+
     return any(pattern.match(first_line) for pattern in HEADING_PATTERNS)
 
 
@@ -44,9 +58,14 @@ def heading_level(text: str) -> int:
     - # 标题 => 1
     - 1.2 标题 => 2
     - 一、标题 => 2
+    - Abstract => 1（英文学术标题视为一级）
     """
 
     first_line = text.strip().splitlines()[0]
+
+    if first_line.lower() in _ENGLISH_HEADING_KEYWORDS:
+        return 1
+
     markdown_match = HEADING_PATTERNS[0].match(first_line)
     if markdown_match:
         return len(markdown_match.group(1))

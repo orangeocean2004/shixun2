@@ -19,7 +19,30 @@ def initialize_chroma() -> None:
     Path(CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)
     if _client is None:
         _client = PersistentClient(path=str(CHROMA_PERSIST_DIR))
-    _collection = _client.get_or_create_collection(name=CHROMA_COLLECTION_NAME)
+
+    # 使用本地缓存的 MiniLM-L12 模型，避免 ChromaDB 默认模型需要联网下载
+    embedding_fn = _get_embedding_function()
+    _collection = _client.get_or_create_collection(
+        name=CHROMA_COLLECTION_NAME,
+        embedding_function=embedding_fn,
+    )
+
+
+_embedding_fn = None
+
+
+def _get_embedding_function():
+    global _embedding_fn
+    if _embedding_fn is not None:
+        return _embedding_fn
+    try:
+        from chromadb.utils import embedding_functions
+        _embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="paraphrase-multilingual-MiniLM-L12-v2",
+        )
+    except ImportError:
+        _embedding_fn = None
+    return _embedding_fn
 
 
 def _get_collection():

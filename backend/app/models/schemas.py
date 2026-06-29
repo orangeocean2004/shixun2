@@ -41,6 +41,7 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     question: str
     top_k: int
+    answer: str = ""
     chunks: list[RetrievedChunk]
 
 

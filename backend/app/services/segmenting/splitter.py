@@ -392,11 +392,18 @@ def should_flush_for_length_boundary(blocks: list[DocumentBlock], config: Segmen
 
 
 def should_flush_for_semantic_boundary(current_text: str, next_text: str, config: SegmentConfig) -> bool:
-    """用轻量词向量相似度判断是否应提前收束。"""
+    """用轻量词向量相似度判断是否应提前收束。
+
+    只有当前文本已接近目标长度时才允许语义边界切分，
+    避免同一标题下的并列短段落被提前拆开。
+    """
 
     if not config.enable_semantic_boundary:
         return False
     if len(current_text) < config.min_chars:
+        return False
+    # 当前文本还不到目标长度的 75%，即使语义有差异也继续累积
+    if len(current_text) < int(config.target_chars * 0.85):
         return False
     similarity = cosine_similarity(current_text, next_text)
     return similarity < config.semantic_boundary_threshold

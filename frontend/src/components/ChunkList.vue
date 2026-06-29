@@ -6,6 +6,10 @@ const props = defineProps({
     type: Array,
     required: true,
   },
+  docId: {
+    type: String,
+    default: '',
+  },
 })
 
 const collapsedIds = ref(new Set())
@@ -57,6 +61,118 @@ function getChunkLabels(chunk) {
     return [source.trim()]
   }
   return []
+}
+
+const IMAGE_PATTERN = /\[IMAGE:\s*([^\]]+)\]/g
+
+function getDocId() {
+  return props.docId || ''
+}
+
+// 把 Markdown 表格文本转成 { headers, rows }
+function parseMarkdownTable(text) {
+  const lines = text.trim().split('\n')
+  // 必须有至少两行非空，且包含 |
+  const pipeLines = lines.filter(l => l.includes('|'))
+  if (pipeLines.length < 2) return null
+
+  // 第二行必须是分隔行 (如 | --- | --- |)
+  const sep = pipeLines[1].replace(/\s/g, '')
+  if (!/^\|[-:]+\|$/.test(sep)) return null
+
+  const splitCells = (line) => line.split('|').slice(1, -1).map(c => c.trim())
+  const header = splitCells(pipeLines[0])
+  const rows = pipeLines.slice(2).map(splitCells).filter(r => r.length > 0)
+
+  if (header.length === 0 || rows.length === 0) return null
+  return { headers: header, rows }
+}
+
+function renderContentParts(content) {
+  // 按表格分隔符切分：单独一行的 |---| 是 Markdown 表格标记
+  const parts = []
+  const tableSep = /\n\|[-:\s|]+\|\n/
+  const segments = content.split(tableSep)
+
+  if (segments.length === 1) {
+    // 没有表格，只处理图片
+    return _renderTextWithImages(content)
+  }
+
+  for (let i = 0; i < segments.length; i++) {
+    if (i === 0) {
+      // 第一个段：表格前的内容 + 表头行
+      const lines = segments[i].split('\n')
+      const lastPipe = lines.length - 1
+      // 找到最后一个 | 行作为表头
+      let headerIdx = -1
+      for (let j = lines.length - 1; j >= 0; j--) {
+        if (lines[j].includes('|')) { headerIdx = j; break }
+      }
+      if (headerIdx >= 0) {
+        if (headerIdx > 0) {
+          parts.push(..._renderTextWithImages(lines.slice(0, headerIdx).join('\n')))
+        }
+        // 表头行 + 分隔符 + 后续数据行组成表格
+        const nextSeg = i + 1 < segments.length ? segments[i + 1] : ''
+        const nextLines = nextSeg.split('\n')
+        // 找到数据行的结束（下一个空行或文本开始处）
+        let dataEnd = 0
+        for (let j = 0; j < nextLines.length; j++) {
+          if (nextLines[j].includes('|')) dataEnd = j + 1
+          else if (dataEnd > 0) break
+        }
+        const tableLines = [lines[headerIdx], '| --- |', ...nextLines.slice(0, dataEnd)]
+        const tableText = tableLines.join('\n')
+        const tableData = parseMarkdownTable(tableText)
+        if (tableData) {
+          parts.push({ type: 'table', ...tableData })
+        } else {
+          parts.push({ type: 'text', value: tableText })
+        }
+        // 数据行后面的文本
+        if (dataEnd < nextLines.length) {
+          parts.push(..._renderTextWithImages(nextLines.slice(dataEnd).join('\n')))
+        }
+        i++ // 跳过一个 segment
+      } else {
+        parts.push(..._renderTextWithImages(segments[i]))
+      }
+    } else if (i === segments.length - 1 || i % 2 === 0) {
+      parts.push(..._renderTextWithImages(segments[i]))
+    }
+  }
+
+  return parts.length ? parts : [{ type: 'text', value: content }]
+}
+
+// 处理纯文本中的图片引用
+function _renderTextWithImages(text) {
+  if (!text) return []
+  const parts = []
+  let lastIndex = 0
+  let match
+  IMAGE_PATTERN.lastIndex = 0
+
+  while ((match = IMAGE_PATTERN.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const t = text.slice(lastIndex, match.index).trim()
+      if (t) parts.push({ type: 'text', value: t })
+    }
+    const filename = match[1]
+    const docId = getDocId()
+    parts.push({
+      type: 'image',
+      filename,
+      url: docId ? `/api/images/${encodeURIComponent(docId)}/${filename}` : '',
+    })
+    lastIndex = match.index + match[0].length
+  }
+  if (lastIndex < text.length) {
+    const t = text.slice(lastIndex).trim()
+    if (t) parts.push({ type: 'text', value: t })
+  }
+  return parts
 }
 
 function getChunkSummary(chunk) {
@@ -126,7 +242,29 @@ watch(
           <p v-if="chunk.title_path?.length" class="title-path">title_path: {{ chunk.title_path.join(' > ') }}</p>
           <p v-if="getChunkSummary(chunk)" class="summary">summary: {{ getChunkSummary(chunk) }}</p>
           <p v-if="getChunkLabels(chunk).length" class="labels">labels: {{ getChunkLabels(chunk).join(', ') }}</p>
-          <pre class="content">{{ chunk.content }}</pre>
+          <div class="content">
+            <template v-for="(part, pi) in renderContentParts(chunk.content)" :key="pi">
+              <pre v-if="part.type === 'text'" class="content-text">{{ part.value }}</pre>
+              <figure v-else-if="part.type === 'image'" class="content-image">
+                <img :src="part.url" :alt="part.filename" loading="lazy" />
+                <figcaption>{{ part.filename }}</figcaption>
+              </figure>
+              <div v-else-if="part.type === 'table'" class="content-table-wrap">
+                <table class="content-table">
+                  <thead>
+                    <tr>
+                      <th v-for="(h, hi) in part.headers" :key="hi">{{ h }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, ri) in part.rows" :key="ri">
+                      <td v-for="(cell, ci) in row" :key="ci">{{ cell }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </div>
           <p v-if="chunk.quality_flags?.length" class="flags">
             quality_flags: {{ chunk.quality_flags.join(', ') }}
           </p>
@@ -245,15 +383,89 @@ watch(
 }
 
 .content {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.content-text {
   margin: 0;
   white-space: pre-wrap;
   line-height: 1.5;
   font-size: 14px;
   background: rgba(255, 255, 255, 0.02);
-  border-radius: 8px;
-  border: 1px solid var(--border);
   padding: 10px;
   color: var(--text-primary);
+}
+
+.content-image {
+  margin: 0;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.content-image img {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 6px;
+}
+
+.content-image figcaption {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.content-table-wrap {
+  overflow-x: auto;
+  padding: 12px 10px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.content-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.content-table th {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: #d0e0ff;
+  font-weight: 600;
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  border-bottom: 2px solid rgba(var(--accent-rgb), 0.3);
+}
+
+.content-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: #c8d2e0;
+}
+
+.content-table tr:last-child td {
+  border-bottom: none;
+}
+
+.content-table tbody tr:hover td {
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.content-table tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.content-table tbody tr:nth-child(even):hover td {
+  background: rgba(var(--accent-rgb), 0.06);
 }
 
 .flags {

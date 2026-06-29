@@ -19,7 +19,7 @@
 
 ## 当前状态
 
-### 已实现 ✅
+### 已实现
 
 **分段引擎** (`backend/app/services/segmenting/`)
 - 结构/语义感知分段：标题边界优先 + embedding 语义边界 + 特殊块保护
@@ -31,15 +31,23 @@
 - 标题层级栈管理 + 跨标题合并抑制碎片化
 - Metric chunk 识别（chunk_type="metric" + 检索增强文本）
 - retrieval_text 与 content 分离（标题路径 + 关键词 + 正文拼接，增强检索召回）
-- 片段级关键词提取 (jieba TF-IDF)
-- 分段质量统计（含不破句率、表格成块率）
+- 图片提取与前端渲染（DOCX/PDF 内嵌图片 → [IMAGE: ...] 占位符 → 网页展示）
+- 英文学术标题识别（Abstract/Keywords/Introduction/Conclusion 等）
+- 分段质量统计（不破句率、表格成块率、长度命中率、回链完整率）
 
-**内容组织** (`backend/app/services/organizer.py` + `model_client.py`)
+**内容组织** (`backend/app/services/organizer/`)
 - 片段级关键词/主题标签：规则模式 (jieba TF-IDF) / LLM 模式 (DeepSeek)
 - 片段级抽取式摘要：Lead-1 + TF-IDF 句子打分 / LLM 生成式摘要
-- 正则实体识别：百分比/指标名/日期/机构/阈值
-- LLM 增强模式：设置 `OPENAI_API_KEY` 自动升级
+- 正则实体识别：百分比/指标名/日期/机构/阈值/版本
+- LLM 增强模式：配置 API Key 后自动升级，失败静默降级规则模式
 - 文档级摘要生成
+
+**LLM 集成** (`backend/app/core/config.py`)
+- 配置 OPENAI_API_KEY + OPENAI_BASE_URL 即可启用
+- RAG 问答：检索 chunk + LLM 生成回答 → `/api/query`
+- QA 合成：基于 chunk 用 LLM 生成问答对 → `/api/synthesize-qa`
+- 可答性校验（词级重叠）+ 忠实度校验（bigram N-gram）
+- 前端 QA 合成标签页：一键生成 + 下载 JSONL
 
 **文档加载** (`backend/app/services/document_loader/`)
 - 多格式支持：.txt / .md / .docx / .pdf

@@ -216,4 +216,6 @@ cython_debug/
 notes
 
 .DS_Store
-data/rag/**
+data/rag/**data/images/
+data/rag/
+=1.0.15

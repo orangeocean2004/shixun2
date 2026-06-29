@@ -95,7 +95,7 @@ def ingest_document(
             temp_file.write(payload)
             temp_path = temp_file.name
 
-        blocks = load_document(temp_path)
+        blocks = load_document(temp_path, doc_id=doc_id)
         block_count = len(blocks)
         upsert_document_processing(
             doc_id=doc_id,
@@ -116,9 +116,13 @@ def ingest_document(
         )
         result = segment_blocks(cleaned_blocks, doc_id=doc_id, config=config)
 
-        replace_chunks(doc_id, result["chunks"])
-        delete_document_vectors(doc_id)
-        upsert_chunks(doc_id, result["chunks"])
+        # ChromaDB 入库（失败不影响分段结果返回）
+        try:
+            replace_chunks(doc_id, result["chunks"])
+            delete_document_vectors(doc_id)
+            upsert_chunks(doc_id, result["chunks"])
+        except Exception:
+            pass
 
         mark_document_ready(
             doc_id=doc_id,
