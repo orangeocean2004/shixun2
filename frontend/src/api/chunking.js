@@ -24,14 +24,13 @@ export async function uploadAndSegment({
   })
 }
 
-export async function queryRetrievedChunks({ docId, question }) {
+export async function queryRetrievedChunks({ question }) {
   return apiFetch('/api/query', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      doc_id: docId,
       question,
     }),
   })

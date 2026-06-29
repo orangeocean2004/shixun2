@@ -33,6 +33,27 @@ def delete_document_vectors(doc_id: str) -> None:
     collection.delete(where={"doc_id": doc_id})
 
 
+def _build_retrieval_document(chunk: dict[str, Any]) -> str:
+    title_path = chunk.get("title_path", [])
+    label = chunk.get("label", [])
+    entity_tags = chunk.get("entity_tags", [])
+    summary = (chunk.get("summary", "") or "").strip()
+    content = (chunk.get("content", "") or "").strip()
+
+    title_text = " / ".join([item for item in title_path if isinstance(item, str) and item.strip()])
+    label_text = ", ".join([item for item in label if isinstance(item, str) and item.strip()])
+    entity_text = ", ".join([item for item in entity_tags if isinstance(item, str) and item.strip()])
+
+    sections = [
+        f"标题路径: {title_text}" if title_text else "",
+        f"标签: {label_text}" if label_text else "",
+        f"实体: {entity_text}" if entity_text else "",
+        f"摘要: {summary}" if summary else "",
+        f"正文: {content}" if content else "",
+    ]
+    return "\n".join([section for section in sections if section])
+
+
 def upsert_chunks(doc_id: str, chunks: list[dict[str, Any]]) -> None:
     if not chunks:
         return
@@ -48,7 +69,7 @@ def upsert_chunks(doc_id: str, chunks: list[dict[str, Any]]) -> None:
         title_path = chunk.get("title_path", [])
 
         ids.append(chunk["chunk_id"])
-        documents.append(chunk.get("content", ""))
+        documents.append(_build_retrieval_document(chunk))
         metadatas.append(
             {
                 "doc_id": doc_id,
@@ -67,16 +88,13 @@ def upsert_chunks(doc_id: str, chunks: list[dict[str, Any]]) -> None:
     collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
 
 
-def query_chunks(doc_id: str | None, question: str, top_k: int) -> list[dict[str, Any]]:
+def query_chunks(question: str, top_k: int) -> list[dict[str, Any]]:
     collection = _get_collection()
     query_kwargs: dict[str, Any] = {
         "query_texts": [question],
         "n_results": top_k,
         "include": ["distances", "metadatas", "documents"],
     }
-    if doc_id:
-        query_kwargs["where"] = {"doc_id": doc_id}
-
     result = collection.query(**query_kwargs)
 
     ids = (result.get("ids") or [[]])[0]
