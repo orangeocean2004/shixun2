@@ -49,10 +49,11 @@ def segment_blocks(
         "chunks": [chunk_to_dict(chunk) for chunk in chunks],
         "statistics": build_statistics(chunks, config),
         "strategy": {
-            "name": "heading_sentence_semantic_rule",
+            "name": "heading_recursive_semantic_rule",
             "min_chars": config.min_chars,
             "target_chars": config.target_chars,
             "max_chars": config.max_chars,
+            "heading_flush_min_chars": config.heading_flush_min_chars,
             "overlap_sentences": config.overlap_sentences,
             "min_tokens": config.min_tokens,
             "target_tokens": config.target_tokens,
@@ -62,6 +63,7 @@ def segment_blocks(
             "semantic_boundary_threshold": config.semantic_boundary_threshold,
             "keyword_strategy": config.keyword_strategy,
             "keyword_tokenizer": "jieba",
+            "recursive_separators": list(config.recursive_separators),
         },
     }
 
@@ -73,8 +75,7 @@ def finalize_chunks(
 ) -> list[Chunk]:
     """把候选 chunk 转成最终 Chunk。
 
-    这里负责生成稳定 chunk_id、source_refs、quality_flags，
-    以及构建检索增强文本 retrieval_text。
+    这里负责生成稳定 chunk_id、source_refs 和 quality_flags。
     """
 
     chunks: list[Chunk] = []
@@ -85,8 +86,6 @@ def finalize_chunks(
         content = candidate["content"]
         char_count = len(content)
         source_refs = build_source_refs(candidate["source_blocks"])
-        title_path = candidate["title_path"]
-        chunk_type = candidate["chunk_type"]
 
         quality_flags: list[str] = []
         if char_count > config.max_chars:
@@ -95,64 +94,67 @@ def finalize_chunks(
             quality_flags.append("undersized")
         if not candidate["source_blocks"]:
             quality_flags.append("missing_source_ref")
-        if chunk_type in {"table", "formula", "code"}:
-            quality_flags.append(f"contains_{chunk_type}")
+        if candidate["chunk_type"] in {"table", "formula", "code"}:
+            quality_flags.append(f'contains_{candidate["chunk_type"]}')
+        if candidate["chunk_type"] == "metric":
+            quality_flags.append("contains_metric")
         if any(block.block_type == "image" for block in candidate["source_blocks"]):
             quality_flags.append("contains_image")
 
         strategy_info = dict(candidate["strategy_info"])
         strategy_info["enrichment"] = "deterministic_v1"
         strategy_info["keyword_strategy"] = config.keyword_strategy
-
-        # 提取标签和构建检索增强文本
-        labels = build_label(title_path, chunk_type, content, keyword_strategy=keyword_strategy)
-        retrieval_text = _build_retrieval_text(title_path, labels, content)
+        section_titles = list(candidate.get("section_titles", []))
+        retrieval_text = build_retrieval_text(candidate)
 
         chunks.append(
             Chunk(
                 chunk_id=chunk_id,
                 content=content,
-                retrieval_text=retrieval_text,
-                title_path=title_path,
-                chunk_type=chunk_type,
+                title_path=candidate["title_path"],
+                chunk_type=candidate["chunk_type"],
                 char_count=char_count,
                 source_refs=source_refs,
                 strategy_info=strategy_info,
                 quality_flags=quality_flags,
-                label=labels,
+                label=build_label(
+                    candidate["title_path"],
+                    candidate["chunk_type"],
+                    content,
+                    keyword_strategy=keyword_strategy,
+                ),
                 summary=build_summary(content),
                 entity_tags=extract_entity_tags(content),
                 backlink=build_backlink(doc_id, chunk_id, source_refs),
+                section_titles=section_titles,
+                retrieval_text=retrieval_text,
             )
         )
 
     return chunks
 
 
-def _build_retrieval_text(
-    title_path: list[str],
-    labels: list[str],
-    content: str,
-) -> str:
-    """构建检索增强文本。
+def build_retrieval_text(candidate: CandidateChunk) -> str:
+    """构造专供检索使用的增强文本，不改变原文 content。"""
 
-    将标题路径、关键词标签与正文拼接，使 embedding 检索能同时
-    捕捉 chunk 的结构上下文和语义信号，弥补短 chunk 在纯文本
-    召回中的劣势。
-
-    格式：标题路径 | 关键词 | 正文
-    """
     parts: list[str] = []
+    title_path = candidate.get("title_path") or []
+    section_titles = candidate.get("section_titles") or []
+    metric_keywords = candidate.get("metric_keywords") or []
 
     if title_path:
-        parts.append(" > ".join(title_path))
-
-    if labels:
-        parts.append("；".join(labels[:5]))
-
-    parts.append(content)
-
-    return " | ".join(parts)
+        parts.append("标题路径: " + " > ".join(str(item) for item in title_path if str(item).strip()))
+    if section_titles:
+        parts.append("包含小节: " + "；".join(str(item) for item in section_titles if str(item).strip()))
+    if metric_keywords:
+        parts.append("关键指标: " + "；".join(str(item) for item in metric_keywords if str(item).strip()))
+    if candidate.get("chunk_type") == "metric":
+        parts.append("内容类型: 技术指标 验收标准 评价指标 百分比 阈值")
+    label = candidate.get("label") or []
+    if label:
+        parts.append("标签: " + "，".join(str(item) for item in label if str(item).strip()))
+    parts.append(str(candidate.get("content", "")))
+    return "\n".join(part for part in parts if part.strip()).strip()
 
 
 def build_source_refs(blocks: list[DocumentBlock]) -> list[dict[str, Any]]:

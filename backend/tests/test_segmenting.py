@@ -21,7 +21,7 @@ class SegmentingSmokeTest(unittest.TestCase):
         self.assertEqual(statistics["undersized_count"], 0)
         self.assertEqual(statistics["source_ref_complete_rate"], 1.0)
         self.assertGreaterEqual(statistics["target_length_hit_rate"], 1.0)
-        self.assertLessEqual(statistics["chunk_count"], 4)
+        self.assertLessEqual(statistics["chunk_count"], 6)
         self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
         self.assertIn(result["strategy"]["keyword_strategy"], {"jieba_tfidf", "jieba_freq"})
 
@@ -33,6 +33,9 @@ class SegmentingSmokeTest(unittest.TestCase):
             self.assertIn("summary", chunk)
             self.assertIn("entity_tags", chunk)
             self.assertIn("backlink", chunk)
+            self.assertIn("section_titles", chunk)
+            self.assertIn("retrieval_text", chunk)
+            self.assertTrue(chunk["retrieval_text"])
             self.assertEqual(chunk["backlink"]["source_ref_count"], len(chunk["source_refs"]))
             self.assertEqual(
                 set(chunk["backlink"]["source_ref_ids"]),
@@ -57,6 +60,9 @@ class SegmentingSmokeTest(unittest.TestCase):
             self.assertIn("summary", chunk)
             self.assertIn("entity_tags", chunk)
             self.assertIn("backlink", chunk)
+            self.assertIn("section_titles", chunk)
+            self.assertIn("retrieval_text", chunk)
+            self.assertTrue(chunk["retrieval_text"])
             self.assertEqual(chunk["backlink"]["source_ref_count"], len(chunk["source_refs"]))
             self.assertEqual(
                 set(chunk["backlink"]["source_ref_ids"]),
@@ -123,6 +129,46 @@ class SegmentingSmokeTest(unittest.TestCase):
                 for chunk in result["chunks"]
             )
         )
+
+    def test_merged_short_sections_keep_first_title_path(self) -> None:
+        text = """
+# 根标题
+
+## 二、研究目标
+短内容。
+
+## 三、核心能力
+这里继续补充说明，让短小节合并后仍然应当保留第一个标题路径。
+""".strip()
+        result = segment_text(
+            text,
+            doc_id="title_path_case",
+            config=SegmentConfig(min_chars=80, target_chars=400, max_chars=800),
+        )
+
+        chunk = result["chunks"][0]
+        self.assertIn("二、研究目标", chunk["content"])
+        self.assertEqual(chunk["title_path"], ["根标题", "二、研究目标"])
+        self.assertIn("二、研究目标", chunk["section_titles"])
+        self.assertIn("三、核心能力", chunk["section_titles"])
+        self.assertIn("包含小节", chunk["retrieval_text"])
+
+    def test_metric_chunk_builds_retrieval_text(self) -> None:
+        text = """
+# 验收标准
+
+不破句率: 100%
+目标长度区间命中率 ≥ 90%
+整体成块率 ≥ 95%
+""".strip()
+        result = segment_text(text, doc_id="metric_case")
+
+        metric_chunks = [chunk for chunk in result["chunks"] if chunk["chunk_type"] == "metric"]
+        self.assertTrue(metric_chunks)
+        chunk = metric_chunks[0]
+        self.assertIn("contains_metric", chunk["quality_flags"])
+        self.assertIn("关键指标", chunk["retrieval_text"])
+        self.assertIn("不破句率", chunk["retrieval_text"])
 
 
 if __name__ == "__main__":

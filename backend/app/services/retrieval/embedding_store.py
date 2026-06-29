@@ -18,31 +18,11 @@ Model:
 from __future__ import annotations
 
 import re
-import threading
 from typing import Any
 
 import numpy as np
 
-_LOCK = threading.Lock()
-_MODEL = None
-_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
-
-
-def _get_model() -> Any:
-    """Lazy-load the sentence-transformers model (thread-safe)."""
-    global _MODEL
-    if _MODEL is not None:
-        return _MODEL
-    with _LOCK:
-        if _MODEL is not None:
-            return _MODEL
-        try:
-            from sentence_transformers import SentenceTransformer
-
-            _MODEL = SentenceTransformer(_MODEL_NAME, local_files_only=True)
-        except Exception:
-            _MODEL = False
-        return _MODEL
+from backend.app.services.embedding import EmbeddingEncoder, get_default_encoder
 
 
 class EmbeddingStore:
@@ -56,8 +36,14 @@ class EmbeddingStore:
         # hits: list of {chunk_id, content, score, ...}
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        encoder: EmbeddingEncoder | None = None,
+        ranker: LexicalBoostRanker | None = None,
+    ) -> None:
         self._indexes: dict[str, _EmbeddingIndex] = {}
+        self._encoder = encoder or get_default_encoder()
+        self._ranker = ranker or LexicalBoostRanker()
 
     # ── public API ──────────────────────────────────────
 
@@ -69,9 +55,8 @@ class EmbeddingStore:
         if not chunks:
             raise ValueError("chunks list is empty")
 
-        model = _get_model()
         texts = [_enrich_text(chunk) for chunk in chunks]
-        embeddings = _encode(texts, model)
+        embeddings = self._encoder.encode(texts)
 
         index = _EmbeddingIndex(doc_id=doc_id, chunks=chunks, embeddings=embeddings)
         self._indexes[doc_id] = index
@@ -79,7 +64,7 @@ class EmbeddingStore:
         return {
             "doc_id": doc_id,
             "chunk_count": len(chunks),
-            "embedding_model": _MODEL_NAME if model and model is not False else "fallback-tfidf",
+            "embedding_model": self._encoder.model_name,
             "dimension": embeddings.shape[1] if embeddings.shape[0] > 0 else 0,
         }
 
@@ -98,10 +83,9 @@ class EmbeddingStore:
             known = ", ".join(sorted(self._indexes)) or "(none)"
             raise KeyError(f"Unknown doc_id: {doc_id}. Known: {known}")
 
-        model = _get_model()
-        query_vec = _encode([query], model)
+        query_vec = self._encoder.encode([query])
         scores = index.similarity(query_vec[0])
-        reranked = rerank_scores(query, index.chunks, scores)
+        reranked = self._ranker.rerank(query, index.chunks, scores)
         ranked = reranked.argsort()[::-1][:top_k]
 
         hits: list[dict[str, Any]] = []
@@ -156,24 +140,31 @@ def _enrich_text(chunk: dict[str, Any]) -> str:
     return content
 
 
+class LexicalBoostRanker:
+    """Apply small lexical and metric boosts after embedding similarity."""
+
+    def rerank(self, query: str, chunks: list[dict[str, Any]], scores: np.ndarray) -> np.ndarray:
+        query_terms = extract_query_terms(query)
+        if not query_terms:
+            return scores
+
+        adjusted = scores.astype(np.float32, copy=True)
+        metric_query = is_metric_query(query)
+        for index, chunk in enumerate(chunks):
+            retrieval_text = _enrich_text(chunk)
+            normalized = normalize_text(retrieval_text)
+            matches = sum(1 for term in query_terms if term in normalized)
+            if matches:
+                adjusted[index] += min(0.08, 0.025 * matches)
+            if metric_query and chunk.get("chunk_type") == "metric":
+                adjusted[index] += 0.05
+        return adjusted
+
+
 def rerank_scores(query: str, chunks: list[dict[str, Any]], scores: np.ndarray) -> np.ndarray:
-    """Add a small lexical boost from retrieval_text without overriding embeddings."""
+    """Backward-compatible wrapper for callers that use the old helper."""
 
-    query_terms = extract_query_terms(query)
-    if not query_terms:
-        return scores
-
-    adjusted = scores.astype(np.float32, copy=True)
-    metric_query = is_metric_query(query)
-    for index, chunk in enumerate(chunks):
-        retrieval_text = _enrich_text(chunk)
-        normalized = normalize_text(retrieval_text)
-        matches = sum(1 for term in query_terms if term in normalized)
-        if matches:
-            adjusted[index] += min(0.08, 0.025 * matches)
-        if metric_query and chunk.get("chunk_type") == "metric":
-            adjusted[index] += 0.05
-    return adjusted
+    return LexicalBoostRanker().rerank(query, chunks, scores)
 
 
 def extract_query_terms(query: str) -> list[str]:
@@ -236,42 +227,3 @@ class _EmbeddingIndex:
         if query_norm == 0:
             query_norm = 1.0
         return (self.embeddings @ query_vec) / (self._norms.flatten() * query_norm)
-
-
-def _encode(texts: list[str], model: Any) -> np.ndarray:
-    """Encode texts to embeddings.
-
-    If sentence-transformers is unavailable, falls back to a
-    lightweight character-ngram vectorizer (similar to TF-IDF but
-    normalized for length).
-    """
-    if model and model is not False:
-        try:
-            return model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
-        except Exception:
-            pass
-    return _fallback_encode(texts)
-
-
-def _fallback_encode(texts: list[str]) -> np.ndarray:
-    """Character 3-gram one-hot encoding as a minimal fallback.
-
-    This is NOT as good as real embeddings but avoids a hard crash
-    when sentence-transformers is not installed.
-    """
-    # Simple bag-of-char-3grams with 256 dimensions
-    dim = 256
-    vectors = np.zeros((len(texts), dim), dtype=np.float32)
-
-    for i, text in enumerate(texts):
-        text = text.lower()
-        for j in range(len(text) - 2):
-            ngram = text[j : j + 3]
-            # Hash 3-char sequence into 0..255
-            bucket = hash(ngram) % dim
-            vectors[i, bucket] += 1.0
-
-    # Normalize
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return vectors / norms

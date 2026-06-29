@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     strategy_info_json TEXT NOT NULL,
     label_json TEXT NOT NULL,
     entity_tags_json TEXT NOT NULL,
+    section_titles_json TEXT NOT NULL DEFAULT '[]',
+    retrieval_text TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(doc_id, ordinal),
     FOREIGN KEY(doc_id) REFERENCES documents(doc_id) ON DELETE CASCADE
@@ -71,6 +73,15 @@ def _get_conn() -> sqlite3.Connection:
 def initialize_sqlite() -> None:
     with _get_conn() as conn:
         conn.executescript(SCHEMA_SQL)
+        _ensure_chunk_migration_columns(conn)
+
+
+def _ensure_chunk_migration_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    if "section_titles_json" not in columns:
+        conn.execute("ALTER TABLE chunks ADD COLUMN section_titles_json TEXT NOT NULL DEFAULT '[]'")
+    if "retrieval_text" not in columns:
+        conn.execute("ALTER TABLE chunks ADD COLUMN retrieval_text TEXT")
 
 
 def _dump_json(value: Any) -> str:
@@ -120,6 +131,8 @@ def _row_to_chunk(row: sqlite3.Row) -> dict[str, Any]:
         "strategy_info": _load_json(row["strategy_info_json"], {}),
         "label": _load_json(row["label_json"], []),
         "entity_tags": _load_json(row["entity_tags_json"], []),
+        "section_titles": _load_json(row["section_titles_json"], []),
+        "retrieval_text": row["retrieval_text"] or "",
     }
 
 
@@ -220,9 +233,10 @@ def replace_chunks(doc_id: str, chunks: list[dict[str, Any]]) -> None:
                 INSERT INTO chunks (
                     chunk_id, doc_id, ordinal, chunk_type, content, summary, char_count,
                     title_path_json, source_refs_json, backlink_json, quality_flags_json,
-                    strategy_info_json, label_json, entity_tags_json
+                    strategy_info_json, label_json, entity_tags_json,
+                    section_titles_json, retrieval_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk["chunk_id"],
@@ -239,6 +253,8 @@ def replace_chunks(doc_id: str, chunks: list[dict[str, Any]]) -> None:
                     _dump_json(chunk.get("strategy_info", {})),
                     _dump_json(chunk.get("label", [])),
                     _dump_json(chunk.get("entity_tags", [])),
+                    _dump_json(chunk.get("section_titles", [])),
+                    chunk.get("retrieval_text", ""),
                 ),
             )
 

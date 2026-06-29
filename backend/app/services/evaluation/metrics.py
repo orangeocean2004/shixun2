@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from backend.app.services.retrieval.embedding_store import _encode, _get_model
+from backend.app.services.embedding import EmbeddingEncoder, get_default_encoder
 
 
 # ── Relevance judge ─────────────────────────────────────
@@ -45,6 +45,7 @@ class EmbeddingRelevance:
     _reference_vec: np.ndarray | None = field(default=None, repr=False, init=False)
     _reference_text: str = ""
     _keywords: list[str] = field(default_factory=list, repr=False, init=False)
+    _encoder: EmbeddingEncoder = field(default_factory=get_default_encoder, repr=False)
 
     def set_reference(self, text: str, keywords: list[str] | None = None) -> None:
         """Set the reference answer text to compare chunks against.
@@ -61,16 +62,14 @@ class EmbeddingRelevance:
             return
         self._reference_text = text
         self._keywords = normalized_keywords
-        model = _get_model()
-        vecs = _encode([text], model)
+        vecs = self._encoder.encode([text])
         self._reference_vec = vecs[0]
 
     def score(self, chunk_content: str) -> float:
         """Return relevance score (cosine similarity) for a chunk."""
         if self._reference_vec is None:
             return 0.0
-        model = _get_model()
-        chunk_vec = _encode([chunk_content], model)[0]
+        chunk_vec = self._encoder.encode([chunk_content])[0]
         # Cosine similarity
         dot = float(np.dot(self._reference_vec, chunk_vec))
         ref_norm = float(np.linalg.norm(self._reference_vec))
@@ -111,6 +110,7 @@ class EmbeddingRelevance:
 def compute_ir_metrics(
     retrieved_chunks: list[dict[str, Any]],
     relevance_judge: EmbeddingRelevance,
+    *,
     all_chunks: list[dict[str, Any]] | None = None,
     k_values: tuple[int, ...] = (1, 3, 5),
 ) -> dict[str, float]:
@@ -120,18 +120,14 @@ def compute_ir_metrics(
         retrieved_chunks: Ranked list of retrieved chunk dicts.
         relevance_judge: Configured EmbeddingRelevance instance with
                          reference text already set.
+        all_chunks: Full corpus used to count all relevant chunks.
         k_values: Which cut-off ranks to compute metrics for.
 
     Returns:
         Dict mapping metric name → value.
     """
 
-    if isinstance(all_chunks, tuple):
-        k_values = all_chunks
-        all_chunks = None
-
     relevance = relevance_judge.judge_batch(retrieved_chunks)
-    scores = [c.get("score", 0.0) for c in retrieved_chunks]
     if all_chunks is None:
         total_relevant = sum(relevance)
     else:

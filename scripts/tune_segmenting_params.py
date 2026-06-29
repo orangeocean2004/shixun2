@@ -25,9 +25,9 @@ SEARCH_SPACE = {
     "min_chars": [220, 260, 300],
     "target_chars": [650, 750, 900],
     "max_chars": [900, 1000, 1200],
+    "heading_flush_min_chars": [120, 180, 240, 300],
     "semantic_boundary_threshold": [0.35, 0.45, 0.55],
     "overlap_sentences": [0, 1, 2],
-    "enable_semantic_boundary": [True],
 }
 
 
@@ -126,7 +126,7 @@ def average(values: list[float]) -> float:
 def format_config(config: SegmentConfig) -> str:
     return (
         f"min={config.min_chars} target={config.target_chars} max={config.max_chars} "
-        f"sem={config.semantic_boundary_threshold} "
+        f"heading={config.heading_flush_min_chars} sem={config.semantic_boundary_threshold} "
         f"overlap={config.overlap_sentences}"
     )
 

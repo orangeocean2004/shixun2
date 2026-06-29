@@ -52,6 +52,8 @@ class RetrievalRerankTest(unittest.TestCase):
                 "title_path": ["概述"],
                 "label": ["normal", "背景"],
                 "entity_tags": [],
+                "section_titles": [],
+                "retrieval_text": "",
                 "summary": "",
                 "content": "与问题无关的内容",
                 "quality_flags": [],
@@ -62,6 +64,8 @@ class RetrievalRerankTest(unittest.TestCase):
                 "title_path": ["检索策略"],
                 "label": ["normal", "BM25", "检索"],
                 "entity_tags": ["BM25"],
+                "section_titles": ["检索策略"],
+                "retrieval_text": "标题路径: 检索策略\n标签: BM25 检索\n正文: BM25 检索适用于关键词密集型问题",
                 "summary": "BM25 检索在关键词匹配中效果稳定",
                 "content": "BM25 检索适用于关键词密集型问题",
                 "quality_flags": [],
@@ -80,6 +84,7 @@ class RetrievalRerankTest(unittest.TestCase):
             "title_path": ["第一章", "检索方案"],
             "label": ["normal", "检索", "BM25"],
             "entity_tags": ["BM25", "RAG"],
+            "section_titles": ["检索方案"],
             "summary": "关键词检索摘要",
             "content": "正文内容",
         }
@@ -91,6 +96,17 @@ class RetrievalRerankTest(unittest.TestCase):
         self.assertIn("实体: BM25, RAG", retrieval_doc)
         self.assertIn("摘要: 关键词检索摘要", retrieval_doc)
         self.assertIn("正文: 正文内容", retrieval_doc)
+
+    def test_build_retrieval_document_prefers_retrieval_text(self) -> None:
+        chunk = {
+            "title_path": ["旧标题"],
+            "retrieval_text": "标题路径: 新标题\n关键指标: Recall@5 +15.1%\n正文: 检索增强文本",
+            "content": "正文内容",
+        }
+
+        retrieval_doc = _build_retrieval_document(chunk)
+
+        self.assertEqual(retrieval_doc, chunk["retrieval_text"])
 
 
 if __name__ == "__main__":

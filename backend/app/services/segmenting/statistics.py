@@ -121,6 +121,8 @@ def chunk_to_dict(chunk: Chunk) -> dict[str, Any]:
         "summary": chunk.summary,
         "entity_tags": chunk.entity_tags,
         "backlink": chunk.backlink,
+        "section_titles": chunk.section_titles,
+        "retrieval_text": chunk.retrieval_text,
     }
 
 
