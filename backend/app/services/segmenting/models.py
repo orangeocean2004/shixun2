@@ -16,13 +16,32 @@ class SegmentConfig:
     target_chars: int = 900
     max_chars: int = 1200
     overlap_sentences: int = 1
-    min_tokens: int = 180
-    target_tokens: int = 512
-    max_tokens: int = 900
+    heading_flush_min_chars: int = 300
+    min_tokens: int = 100
+    target_tokens: int = 900
+    max_tokens: int = 1200
     include_heading_in_content: bool = True
     enable_semantic_boundary: bool = True
-    semantic_boundary_threshold: float = 0.72
+    semantic_boundary_threshold: float = 0.35
     keyword_strategy: str = "jieba_tfidf"
+    recursive_separators: tuple[str, ...] = (
+        "\n\n",
+        "\n",
+        "。",
+        "！",
+        "？",
+        "；",
+        ";",
+        ". ",
+        ".",
+        "，",
+        "、",
+        ",",
+        ":",
+        "：",
+        " ",
+        "",
+    )
 
 
 @dataclass
@@ -55,6 +74,8 @@ class Chunk:
     summary: str = ""
     entity_tags: list[str] = field(default_factory=list)
     backlink: dict[str, Any] = field(default_factory=dict)
+    section_titles: list[str] = field(default_factory=list)
+    retrieval_text: str = ""
 
 
 CandidateChunk = dict[str, Any]

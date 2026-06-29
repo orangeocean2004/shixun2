@@ -201,7 +201,9 @@ def lexical_overlap_score(question: str, chunk: dict[str, Any]) -> float:
 
     retrieval_text = "\n".join(
         [
+            chunk.get("retrieval_text", ""),
             " / ".join(chunk.get("title_path", [])),
+            " / ".join(chunk.get("section_titles", [])),
             " ".join(chunk.get("label", [])),
             " ".join(chunk.get("entity_tags", [])),
             chunk.get("summary", ""),
