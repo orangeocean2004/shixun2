@@ -73,14 +73,15 @@ def _get_conn() -> sqlite3.Connection:
 def initialize_sqlite() -> None:
     with _get_conn() as conn:
         conn.executescript(SCHEMA_SQL)
-        _ensure_chunk_column(conn, "section_titles_json", "TEXT NOT NULL DEFAULT '[]'")
-        _ensure_chunk_column(conn, "retrieval_text", "TEXT")
+        _ensure_chunk_migration_columns(conn)
 
 
-def _ensure_chunk_column(conn: sqlite3.Connection, column_name: str, column_spec: str) -> None:
+def _ensure_chunk_migration_columns(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
-    if column_name not in columns:
-        conn.execute(f"ALTER TABLE chunks ADD COLUMN {column_name} {column_spec}")
+    if "section_titles_json" not in columns:
+        conn.execute("ALTER TABLE chunks ADD COLUMN section_titles_json TEXT NOT NULL DEFAULT '[]'")
+    if "retrieval_text" not in columns:
+        conn.execute("ALTER TABLE chunks ADD COLUMN retrieval_text TEXT")
 
 
 def _dump_json(value: Any) -> str:

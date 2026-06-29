@@ -5,6 +5,8 @@ from collections import Counter
 from functools import lru_cache
 from typing import Any
 
+from backend.app.services.embedding import embedding_similarity as embedding_model_similarity
+
 from .heading import heading_level, normalize_heading
 from .models import CandidateChunk, DocumentBlock, SegmentConfig
 
@@ -643,42 +645,7 @@ def compact_for_embedding(text: str, max_chars: int = 1200) -> str:
 def embedding_similarity(left: str, right: str) -> float | None:
     """计算两段短文本的 embedding 余弦相似度。"""
 
-    try:
-        import numpy as np
-
-        model = _get_embedding_model()
-        if not model or model is False:
-            return None
-        vectors = model.encode([left, right], convert_to_numpy=True, show_progress_bar=False)
-        left_vec = vectors[0]
-        right_vec = vectors[1]
-        denom = float(np.linalg.norm(left_vec) * np.linalg.norm(right_vec))
-        if denom == 0:
-            return 0.0
-        return round(float(np.dot(left_vec, right_vec) / denom), 6)
-    except Exception:
-        return None
-
-
-_embedding_model: Any = None
-
-
-def _get_embedding_model() -> Any:
-    """延迟加载多语种轻量 embedding 模型。"""
-
-    global _embedding_model
-    if _embedding_model is not None:
-        return _embedding_model
-    try:
-        from sentence_transformers import SentenceTransformer
-
-        _embedding_model = SentenceTransformer(
-            "paraphrase-multilingual-MiniLM-L12-v2",
-            local_files_only=True,
-        )
-    except Exception:
-        _embedding_model = False
-    return _embedding_model
+    return embedding_model_similarity(left, right, use_fallback=False)
 
 
 def can_merge_chunks(left: CandidateChunk, right: CandidateChunk, config: SegmentConfig) -> bool:
