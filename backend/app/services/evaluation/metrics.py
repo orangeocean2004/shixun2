@@ -24,6 +24,13 @@ from backend.app.services.embedding import EmbeddingEncoder, get_default_encoder
 
 # ── Relevance judge ─────────────────────────────────────
 
+KEYWORD_RELEVANCE_THRESHOLD = 0.34
+"""At least one third of expected keywords is strong direct evidence."""
+
+KEYWORD_SEMANTIC_THRESHOLD = 0.57
+"""Use a stricter semantic cutoff when keyword hints are available."""
+
+
 @dataclass
 class EmbeddingRelevance:
     """Judge chunk relevance by embedding similarity to reference text.
@@ -93,16 +100,53 @@ class EmbeddingRelevance:
     def is_relevant(self, chunk_content: str) -> bool:
         """True if the chunk is semantically relevant to the reference."""
         keyword_score = self.keyword_score(chunk_content)
-        if keyword_score >= 0.34:
+        if keyword_score >= KEYWORD_RELEVANCE_THRESHOLD:
             return True
         if keyword_score > 0 and contains_number_or_metric(chunk_content):
             return True
-        semantic_threshold = max(self.threshold, 0.57) if self._keywords else self.threshold
+        semantic_threshold = self._semantic_threshold()
         return self.score(chunk_content) >= semantic_threshold
 
     def judge_batch(self, chunks: list[dict[str, Any]]) -> list[bool]:
         """Return relevance labels for a batch of chunks."""
-        return [self.is_relevant(c.get("content", "")) for c in chunks]
+        contents = [c.get("content", "") for c in chunks]
+        if not contents:
+            return []
+
+        labels = [False] * len(contents)
+        semantic_indexes: list[int] = []
+        for index, content in enumerate(contents):
+            keyword_score = self.keyword_score(content)
+            if keyword_score >= KEYWORD_RELEVANCE_THRESHOLD:
+                labels[index] = True
+            elif keyword_score > 0 and contains_number_or_metric(content):
+                labels[index] = True
+            else:
+                semantic_indexes.append(index)
+
+        if self._reference_vec is None or not semantic_indexes:
+            return labels
+
+        semantic_threshold = self._semantic_threshold()
+        semantic_contents = [contents[index] for index in semantic_indexes]
+        chunk_vectors = self._encoder.encode(semantic_contents)
+        ref_norm = float(np.linalg.norm(self._reference_vec))
+        if ref_norm == 0:
+            return labels
+
+        for vector_index, chunk_index in enumerate(semantic_indexes):
+            chunk_vec = chunk_vectors[vector_index]
+            chunk_norm = float(np.linalg.norm(chunk_vec))
+            if chunk_norm == 0:
+                continue
+            score = float(np.dot(self._reference_vec, chunk_vec)) / (ref_norm * chunk_norm)
+            labels[chunk_index] = score >= semantic_threshold
+        return labels
+
+    def _semantic_threshold(self) -> float:
+        if self._keywords:
+            return max(self.threshold, KEYWORD_SEMANTIC_THRESHOLD)
+        return self.threshold
 
 
 # ── IR metrics ──────────────────────────────────────────

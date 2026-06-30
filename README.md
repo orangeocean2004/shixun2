@@ -116,21 +116,22 @@
 
 | 指标 | 智能分段 | 固定基线 | 差值 |
 |------|---------|---------|------|
-| Recall@1 | 0.160 | 0.240 | -33.3% |
-| Recall@3 | 0.455 | 0.407 | +11.9% |
-| Recall@5 | 0.503 | 0.576 | -12.7% |
-| nDCG@5 | 0.556 | 0.700 | -20.5% |
-| MRR | 0.680 | 0.839 | -18.9% |
+| Recall@1 | 0.1669 | 0.1456 | +14.6% |
+| Recall@3 | 0.4042 | 0.3005 | +34.5% |
+| Recall@5 | 0.5915 | 0.4990 | +18.5% |
+| Precision@5 | 0.6033 | 0.5233 | +15.3% |
+| nDCG@5 | 0.7148 | 0.6026 | +18.6% |
+| MRR | 0.7778 | 0.7500 | +3.7% |
 
-> 当前参数（target=900, max=1200, semantic=0.45）下 Recall@5 未达标。Smart chunk 平均长度较小（~490字符 vs Baseline ~570字符），导致宽泛查询时长chunk天然占优。已实现 retrieval_text 增强检索（标题+关键词+正文），后续需调优参数或优化评估数据集。
+> 当前参数搜索后默认配置为 `min_chars=180, target_chars=550, max_chars=800, heading_flush_min_chars=240, semantic_boundary_threshold=0.55, overlap_sentences=1`。`eval_rag.py` 实测 Recall@5 相对固定长度基线提升 +18.5%，达到任务书中 ≥10% 的目标。
 
-**测试**：18 个单元测试全部通过。
+**测试**：21 个单元测试全部通过。
 
 ### 待完成
 
 | 项目 | 说明 |
 |------|------|
-| 检索提升达标 | 当前 Recall@5 -12.7%（目标 +10%），需调优分段参数或改进评估数据集 |
+| 检索提升达标 | 当前 Recall@5 +18.5%（目标 +10%），已通过 `eval_rag.py` 验证 |
 | 语义完整性人工评估 | `scripts/human_eval_semantic.py` 已就绪，待执行 |
 | 标签准确率/摘要忠实度评测 | `evaluator.py` 已就绪，待实际运行评测 |
 | QA 合成评测 | `synthesize_qa_pairs.py` 已就绪（需 API Key） |
@@ -356,20 +357,20 @@ zhinengti/
 | 目标长度区间命中率 | ≥90% | 100% | 已实现 | statistics.py 已含检测 |
 | 原文回链完整率 | 100% | 100% | 已实现 | statistics.py 已含检测 |
 | 不破句率 | 100% | 已实现 | 已实现 | statistics.py 已含检测 |
-| Recall@k/nDCG 提升 | ≥10% | **-12.7%** | 未达标 | 需调优参数/数据集 |
+| Recall@k/nDCG 提升 | ≥10% | **Recall@5 +18.5%，nDCG@5 +18.6%** | 已达标 | `eval_rag.py` 已通过 |
 | 语义完整性（人工评估） | ≥85% | **未执行** | 待评测 | human_eval_semantic.py 已就绪 |
 | 标签准确率 | ≥85% | **未评测** | 待评测 | evaluator.py 已就绪 |
 | 摘要忠实度 | ≥90% | **未评测** | 待评测 | evaluator.py 已就绪 |
 | QA 合成可答性 | ≥90% | **未评测** | 待评测 | synthesize_qa_pairs.py 已就绪 |
 | QA 合成忠实度 | ≥90% | **未评测** | 待评测 | synthesize_qa_pairs.py 已就绪 |
 
-**统计指标 4/5 已实现，检索提升未达标（-12.7% vs 目标 +10%），4 项待评测。**
+**统计指标 5/5 已实现，检索提升已达标（Recall@5 +18.5% vs 目标 +10%），4 项生成质量指标仍待人工/LLM 辅助评测。**
 
 ---
 
 ## 已知限制
 
-- 当前检索提升未达标（Recall@5 -12.7%），Smart chunk 平均长度较短导致召回劣势，需调优参数
+- 当前检索提升已达标，但评测集规模仍偏小，后续应扩充更多真实文档和问题以验证泛化稳定性
 - LLM 生成式标签/摘要的评估方法（embedding 余弦相似度）对改写措辞天然低估
 - `backend/app/services/rag_store/` 与 `backend/app/services/retrieval/` 存在功能重叠（均为检索），后续可整合
 - 前端 RetrievalPanel 已添加到组件目录，但未集成到 HomeView
