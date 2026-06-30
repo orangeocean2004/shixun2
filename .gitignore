@@ -185,6 +185,7 @@ venv.bak/
 .spyderproject
 .spyproject
 
+
 # Rope project settings
 .ropeproject
 
@@ -216,6 +217,11 @@ cython_debug/
 notes
 
 .DS_Store
+data/rag/**
+
+*.sqlite3
+*.db
 data/rag/**data/images/
 data/rag/
+data/model_settings.json
 =1.0.15

@@ -7,8 +7,8 @@ Provides two tiers:
   OpenAI-compatible endpoint. Gracefully degrades to empty responses when
   no API key is configured so callers always have a fallback path.
 """
-
 from __future__ import annotations
+
 
 import re
 from collections import Counter
@@ -282,5 +282,6 @@ class LLMClient:
             messages.append(("user", prompt))
             response = llm.invoke(messages)
             return response.content if hasattr(response, "content") else str(response)
-        except Exception:
+        except Exception as e:
+            print(f"LLM error error: {e}")
             return ""
