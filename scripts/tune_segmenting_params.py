@@ -37,12 +37,17 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tune segmentation params for RAG retrieval.")
     parser.add_argument("--limit", type=int, default=0, help="Optional max number of configs to test.")
     parser.add_argument("--top", type=int, default=10, help="How many best configs to print.")
+    parser.add_argument(
+        "--strict-missing-docs",
+        action="store_true",
+        help="Fail instead of warning when an eval document path is missing.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    corpus = load_eval_corpus()
+    corpus = load_eval_corpus(strict_missing_docs=args.strict_missing_docs)
     baseline_metrics = evaluate_baseline(corpus)
     results: list[dict[str, Any]] = []
 
@@ -81,11 +86,15 @@ def iter_configs() -> list[SegmentConfig]:
     return configs
 
 
-def load_eval_corpus() -> list[dict[str, Any]]:
+def load_eval_corpus(*, strict_missing_docs: bool = False) -> list[dict[str, Any]]:
     corpus: list[dict[str, Any]] = []
     for eval_doc in EVAL_DATASET:
         doc_path = Path(eval_doc.doc_path)
         if not doc_path.exists():
+            message = f"missing eval document: {eval_doc.doc_id} ({doc_path})"
+            if strict_missing_docs:
+                raise FileNotFoundError(message)
+            print(f"WARNING: {message}", file=sys.stderr)
             continue
 
         blocks = None
@@ -107,7 +116,7 @@ def load_eval_corpus() -> list[dict[str, Any]]:
                 "source_refs": chunk.source_refs,
                 "quality_flags": chunk.quality_flags,
             }
-            for chunk in fixed_length_segment(raw_text, doc_id=f"{eval_doc.doc_id}_fixed")
+            for chunk in fixed_length_segment(raw_text, doc_id=f"{eval_doc.doc_id}_baseline")
         ]
         corpus.append(
             {
