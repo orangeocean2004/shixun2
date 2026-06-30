@@ -7,7 +7,7 @@ from typing import Any
 
 from backend.app.core.config import MODEL_SETTINGS_DEFAULTS, MODEL_SETTINGS_PATH
 
-_SETTING_KEYS = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "LLM_MODEL")
+_SETTING_KEYS = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "LLM_MODEL", "QA_QUALITY_EVALUATOR")
 
 
 def _normalize_settings(data: dict[str, Any] | None) -> dict[str, str]:
@@ -20,6 +20,8 @@ def _normalize_settings(data: dict[str, Any] | None) -> dict[str, str]:
         settings["OPENAI_BASE_URL"] = MODEL_SETTINGS_DEFAULTS["OPENAI_BASE_URL"]
     if not settings["LLM_MODEL"]:
         settings["LLM_MODEL"] = MODEL_SETTINGS_DEFAULTS["LLM_MODEL"]
+    if not settings["QA_QUALITY_EVALUATOR"]:
+        settings["QA_QUALITY_EVALUATOR"] = MODEL_SETTINGS_DEFAULTS["QA_QUALITY_EVALUATOR"]
     return settings
 
 
@@ -57,6 +59,8 @@ def get_model_settings() -> dict[str, str]:
 
 
 def update_model_settings(settings: dict[str, Any]) -> dict[str, str]:
-    normalized = _normalize_settings(settings)
+    current = _load_settings(MODEL_SETTINGS_PATH)
+    merged = {**current, **(settings or {})}
+    normalized = _normalize_settings(merged)
     _write_settings(MODEL_SETTINGS_PATH, normalized)
     return normalized

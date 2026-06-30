@@ -57,7 +57,11 @@ class ModelSettingsPayload(BaseModel):
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = Field(min_length=1)
     LLM_MODEL: str = Field(min_length=1)
+    QA_QUALITY_EVALUATOR: str | None = None
 
 
-class ModelSettingsResponse(ModelSettingsPayload):
-    pass
+class ModelSettingsResponse(BaseModel):
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = Field(min_length=1)
+    LLM_MODEL: str = Field(min_length=1)
+    QA_QUALITY_EVALUATOR: str = "lexical_overlap_v1"

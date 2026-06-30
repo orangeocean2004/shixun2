@@ -23,6 +23,7 @@ from backend.app.models.schemas import (
 )
 from backend.app.services.document_loader import DocumentLoaderError
 from backend.app.services.model_settings import get_model_settings, update_model_settings
+from backend.app.services.qa_quality import get_qa_quality_evaluator
 from backend.app.services.rag_store import ingest_document, list_all_chunks, retrieve_chunks
 from backend.app.services.rag_store.service import (
     RAGDocumentBusyError,
@@ -50,7 +51,7 @@ def get_model_settings_api() -> ModelSettingsResponse:
 
 @router.put("/api/settings/model", response_model=ModelSettingsResponse)
 def update_model_settings_api(payload: ModelSettingsPayload) -> ModelSettingsResponse:
-    saved = update_model_settings(payload.model_dump())
+    saved = update_model_settings(payload.model_dump(exclude_unset=True, exclude_none=True))
     return ModelSettingsResponse(**saved)
 
 
@@ -224,6 +225,9 @@ def synthesize_qa(payload: dict = Body(...)):
     if not llm.is_available:
         raise HTTPException(status_code=400, detail="请先在设置页配置 OPENAI_API_KEY")
 
+    evaluator_name = settings.get("QA_QUALITY_EVALUATOR")
+    evaluator = get_qa_quality_evaluator(evaluator_name)
+
     _system = (
         "你是问答对生成器。根据文档片段生成1-2个问答对。"
         "严格输出 JSON 数组：[{\"question\":\"...\",\"answer\":\"...\"}]"
@@ -274,17 +278,7 @@ def synthesize_qa(payload: dict = Body(...)):
             if not question or not answer:
                 continue
 
-            # 可答性 + 忠实度
-            ans_words = set(re.findall(r"[一-鿿\w]+", answer.lower()))
-            content_words = set(re.findall(r"[一-鿿\w]+", content.lower()))
-            overlap = ans_words & content_words
-            answerable = len(overlap) / max(len(ans_words), 1)
-
-            ans_ngrams = _extract_ngrams(answer.lower(), 2)
-            if ans_ngrams:
-                faithful = sum(1 for ng in ans_ngrams if ng in content.lower()) / len(ans_ngrams)
-            else:
-                faithful = answerable
+            quality = evaluator.evaluate(question=question, answer=answer, content=content)
 
             qa_pairs.append({
                 "id": f"qa_{len(qa_pairs) + 1:04d}",
@@ -292,24 +286,14 @@ def synthesize_qa(payload: dict = Body(...)):
                 "answer": answer,
                 "source_chunk_id": chunk.get("chunk_id", ""),
                 "title_path": chunk.get("title_path", []),
-                "answerable": answerable >= 0.3,
-                "answerable_score": round(answerable, 3),
-                "faithful": faithful >= 0.5,
-                "faithful_score": round(faithful, 3),
-                "quality_score": round((answerable + faithful) / 2, 3),
+                "answerable": quality.answerable,
+                "answerable_score": quality.answerable_score,
+                "faithful": quality.faithful,
+                "faithful_score": quality.faithful_score,
+                "quality_score": quality.quality_score,
             })
 
     return {"qa_pairs": qa_pairs, "total": len(qa_pairs)}
-
-
-import re as _re_module
-
-def _extract_ngrams(text: str, n: int) -> list[str]:
-    """提取文本中的 N-gram 序列（字符级）。"""
-    words = _re_module.findall(r"[一-鿿\w]+", text)
-    if len(words) < n:
-        return [" ".join(words)] if words else []
-    return [" ".join(words[i:i + n]) for i in range(len(words) - n + 1)]
 
 
 def safe_doc_id(value: str) -> str:

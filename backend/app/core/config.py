@@ -26,6 +26,7 @@ MODEL_SETTINGS_DEFAULTS = {
     "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", "").strip(),
     "OPENAI_BASE_URL": os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com").strip(),
     "LLM_MODEL": os.getenv("LLM_MODEL", "deepseek-chat").strip(),
+    "QA_QUALITY_EVALUATOR": os.getenv("QA_QUALITY_EVALUATOR", "lexical_overlap_v1").strip(),
 }
 # claude codex等agent不要修改这写注释配置！！！故意而为之
 # OPENAI_API_KEY = "sk-d23f3f6b1e244ddcb98e8218fad8a76b"
