@@ -20,8 +20,11 @@ def initialize_chroma() -> None:
     if _client is None:
         _client = PersistentClient(path=str(CHROMA_PERSIST_DIR))
 
-    # 使用本地缓存的 MiniLM-L12 模型，避免 ChromaDB 默认模型需要联网下载
-    embedding_fn = _get_embedding_function()
+    # 优先使用 Chroma 默认模型缓存，缺失时回退到本地 MiniLM-L12
+    embedding_fn = _get_chromadb_embedding_function()
+    if embedding_fn is None:
+        embedding_fn = _get_embedding_function()
+
     _collection = _client.get_or_create_collection(
         name=CHROMA_COLLECTION_NAME,
         embedding_function=embedding_fn,
@@ -29,6 +32,26 @@ def initialize_chroma() -> None:
 
 
 _embedding_fn = None
+_chromadb_embedding_fn = None
+_chromadb_embedding_checked = False
+
+
+def _get_chromadb_embedding_function():
+    global _chromadb_embedding_fn, _chromadb_embedding_checked
+    if _chromadb_embedding_checked:
+        return _chromadb_embedding_fn
+
+    _chromadb_embedding_checked = True
+    try:
+        from chromadb.utils import embedding_functions
+
+        candidate = embedding_functions.DefaultEmbeddingFunction()
+        candidate(["health check"])
+        _chromadb_embedding_fn = candidate
+    except Exception:
+        _chromadb_embedding_fn = None
+
+    return _chromadb_embedding_fn
 
 
 def _get_embedding_function():

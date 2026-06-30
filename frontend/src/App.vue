@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
 const themes = [
   {
@@ -31,9 +32,15 @@ function toggleTheme() {
     <header class="header">
       <div class="header-top">
         <h1>面向 RAG 的智能分段 Demo</h1>
-        <button type="button" class="theme-btn" @click="toggleTheme">
-          主题色：{{ currentTheme.label }} → {{ nextThemeLabel }}
-        </button>
+        <div class="header-actions">
+          <nav class="main-nav">
+            <RouterLink class="nav-link" to="/">首页</RouterLink>
+            <RouterLink class="nav-link" to="/settings">设置</RouterLink>
+          </nav>
+          <button type="button" class="theme-btn" @click="toggleTheme">
+            主题色：{{ currentTheme.label }} → {{ nextThemeLabel }}
+          </button>
+        </div>
       </div>
       <p>上传文档并查看分段结果。</p>
     </header>
@@ -101,6 +108,41 @@ function toggleTheme() {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.main-nav {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.nav-link {
+  text-decoration: none;
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+}
+
+.nav-link:hover {
+  border-color: var(--accent);
+  color: #ffffff;
+  background: rgba(var(--accent-rgb), 0.24);
+}
+
+.nav-link.router-link-exact-active {
+  border-color: var(--accent);
+  color: #ffffff;
+  background: rgba(var(--accent-rgb), 0.34);
 }
 
 .header h1 {

@@ -219,8 +219,9 @@ notes
 .DS_Store
 data/rag/**
 
-*.sqlite
+*.sqlite3
 *.db
 data/rag/**data/images/
 data/rag/
+data/model_settings.json
 =1.0.15

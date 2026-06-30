@@ -15,11 +15,14 @@ from backend.app.core.config import (
 )
 from backend.app.models.schemas import (
     ChunkListResponse,
+    ModelSettingsPayload,
+    ModelSettingsResponse,
     QueryRequest,
     QueryResponse,
     SegmentUploadResponse,
 )
 from backend.app.services.document_loader import DocumentLoaderError
+from backend.app.services.model_settings import get_model_settings, update_model_settings
 from backend.app.services.rag_store import ingest_document, list_all_chunks, retrieve_chunks
 from backend.app.services.rag_store.service import (
     RAGDocumentBusyError,
@@ -38,6 +41,17 @@ router = APIRouter()
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/api/settings/model", response_model=ModelSettingsResponse)
+def get_model_settings_api() -> ModelSettingsResponse:
+    return ModelSettingsResponse(**get_model_settings())
+
+
+@router.put("/api/settings/model", response_model=ModelSettingsResponse)
+def update_model_settings_api(payload: ModelSettingsPayload) -> ModelSettingsResponse:
+    saved = update_model_settings(payload.model_dump())
+    return ModelSettingsResponse(**saved)
 
 
 @router.post("/api/segment/upload", response_model=SegmentUploadResponse)
@@ -120,13 +134,13 @@ def query_retrieved_chunks(payload: QueryRequest) -> QueryResponse:
 
         # 尝试用 LLM 根据检索到的 chunk 生成回答
         try:
-            from backend.app.core.config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
             from backend.app.services.organizer.model_client import LLMClient
 
+            settings = get_model_settings()
             llm = LLMClient(
-                api_key=OPENAI_API_KEY,
-                base_url=OPENAI_BASE_URL,
-                model=LLM_MODEL,
+                api_key=settings["OPENAI_API_KEY"],
+                base_url=settings["OPENAI_BASE_URL"],
+                model=settings["LLM_MODEL"],
             )
             if llm.is_available and result.get("chunks"):
                 context_parts = []
@@ -195,16 +209,20 @@ def synthesize_qa(payload: dict = Body(...)):
     import json
     import re
 
-    from backend.app.core.config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
     from backend.app.services.organizer.model_client import LLMClient
 
     chunks = payload.get("chunks", [])
     if not chunks:
         raise HTTPException(status_code=400, detail="chunks 不能为空")
 
-    llm = LLMClient(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, model=LLM_MODEL)
+    settings = get_model_settings()
+    llm = LLMClient(
+        api_key=settings["OPENAI_API_KEY"],
+        base_url=settings["OPENAI_BASE_URL"],
+        model=settings["LLM_MODEL"],
+    )
     if not llm.is_available:
-        raise HTTPException(status_code=400, detail="请先在 core/config.py 中配置 OPENAI_API_KEY")
+        raise HTTPException(status_code=400, detail="请先在设置页配置 OPENAI_API_KEY")
 
     _system = (
         "你是问答对生成器。根据文档片段生成1-2个问答对。"

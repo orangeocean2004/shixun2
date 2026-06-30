@@ -51,3 +51,13 @@ class ChunkListResponse(BaseModel):
     doc_id: str
     total: int
     chunks: list[RetrievedChunk]
+
+
+class ModelSettingsPayload(BaseModel):
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = Field(min_length=1)
+    LLM_MODEL: str = Field(min_length=1)
+
+
+class ModelSettingsResponse(ModelSettingsPayload):
+    pass
