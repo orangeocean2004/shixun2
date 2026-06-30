@@ -102,7 +102,39 @@ class EmbeddingRelevance:
 
     def judge_batch(self, chunks: list[dict[str, Any]]) -> list[bool]:
         """Return relevance labels for a batch of chunks."""
-        return [self.is_relevant(c.get("content", "")) for c in chunks]
+        contents = [c.get("content", "") for c in chunks]
+        if not contents:
+            return []
+
+        labels = [False] * len(contents)
+        semantic_indexes: list[int] = []
+        for index, content in enumerate(contents):
+            keyword_score = self.keyword_score(content)
+            if keyword_score >= 0.34:
+                labels[index] = True
+            elif keyword_score > 0 and contains_number_or_metric(content):
+                labels[index] = True
+            else:
+                semantic_indexes.append(index)
+
+        if self._reference_vec is None or not semantic_indexes:
+            return labels
+
+        semantic_threshold = max(self.threshold, 0.57) if self._keywords else self.threshold
+        semantic_contents = [contents[index] for index in semantic_indexes]
+        chunk_vectors = self._encoder.encode(semantic_contents)
+        ref_norm = float(np.linalg.norm(self._reference_vec))
+        if ref_norm == 0:
+            return labels
+
+        for vector_index, chunk_index in enumerate(semantic_indexes):
+            chunk_vec = chunk_vectors[vector_index]
+            chunk_norm = float(np.linalg.norm(chunk_vec))
+            if chunk_norm == 0:
+                continue
+            score = float(np.dot(self._reference_vec, chunk_vec)) / (ref_norm * chunk_norm)
+            labels[chunk_index] = score >= semantic_threshold
+        return labels
 
 
 # ── IR metrics ──────────────────────────────────────────

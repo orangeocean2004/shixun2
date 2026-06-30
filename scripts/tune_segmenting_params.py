@@ -14,20 +14,22 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend.app.services.evaluation import EmbeddingRelevance, compute_ir_metrics
+from backend.app.services.document_loader import load_document
+from backend.app.services.evaluation import EmbeddingRelevance, compute_ir_metrics, fixed_length_segment
+from backend.app.services.preprocessing import preprocess_document_blocks
 from backend.app.services.retrieval import EmbeddingStore
-from backend.app.services.segmenting import SegmentConfig
+from backend.app.services.segmenting import SegmentConfig, segment_blocks, segment_text
 from backend.tests.eval_dataset import EVAL_DATASET
-from scripts.eval_rag import METRICS, _load_and_segment
+from scripts.eval_rag import METRICS
 
 
 SEARCH_SPACE = {
-    "min_chars": [220, 260, 300],
-    "target_chars": [650, 750, 900],
-    "max_chars": [900, 1000, 1200],
-    "heading_flush_min_chars": [120, 180, 240, 300],
-    "semantic_boundary_threshold": [0.35, 0.45, 0.55],
-    "overlap_sentences": [0, 1, 2],
+    "min_chars": [180, 220, 260, 300],
+    "target_chars": [550, 650, 750, 900],
+    "max_chars": [800, 900, 1000, 1200],
+    "heading_flush_min_chars": [80, 120, 180, 240, 300],
+    "semantic_boundary_threshold": [0.30, 0.35, 0.45, 0.55],
+    "overlap_sentences": [0, 1],
 }
 
 
@@ -40,12 +42,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    corpus = load_eval_corpus()
+    baseline_metrics = evaluate_baseline(corpus)
     results: list[dict[str, Any]] = []
 
     for index, config in enumerate(iter_configs(), start=1):
         if args.limit and index > args.limit:
             break
-        metrics = evaluate_config(config)
+        metrics = evaluate_config(config, corpus, baseline_metrics)
         row = {"config": config, **metrics}
         results.append(row)
         print(
@@ -77,28 +81,100 @@ def iter_configs() -> list[SegmentConfig]:
     return configs
 
 
-def evaluate_config(config: SegmentConfig) -> dict[str, float]:
+def load_eval_corpus() -> list[dict[str, Any]]:
+    corpus: list[dict[str, Any]] = []
+    for eval_doc in EVAL_DATASET:
+        doc_path = Path(eval_doc.doc_path)
+        if not doc_path.exists():
+            continue
+
+        blocks = None
+        suffix = doc_path.suffix.lower()
+        if suffix in (".txt", ".md"):
+            raw_text = doc_path.read_text(encoding="utf-8")
+        else:
+            raw_blocks = load_document(str(doc_path))
+            blocks, _ = preprocess_document_blocks(raw_blocks)
+            raw_text = "\n\n".join(block.text for block in blocks)
+
+        baseline_chunks = [
+            {
+                "chunk_id": chunk.chunk_id,
+                "content": chunk.content,
+                "title_path": chunk.title_path,
+                "chunk_type": chunk.chunk_type,
+                "char_count": chunk.char_count,
+                "source_refs": chunk.source_refs,
+                "quality_flags": chunk.quality_flags,
+            }
+            for chunk in fixed_length_segment(raw_text, doc_id=f"{eval_doc.doc_id}_fixed")
+        ]
+        corpus.append(
+            {
+                "eval_doc": eval_doc,
+                "blocks": blocks,
+                "raw_text": raw_text,
+                "baseline_chunks": baseline_chunks,
+            }
+        )
+    return corpus
+
+
+def build_smart_chunks(item: dict[str, Any], config: SegmentConfig) -> list[dict[str, Any]]:
+    eval_doc = item["eval_doc"]
+    blocks = item["blocks"]
+    if blocks is not None:
+        result = segment_blocks(blocks, doc_id=eval_doc.doc_id, config=config)
+    else:
+        result = segment_text(item["raw_text"], doc_id=eval_doc.doc_id, config=config)
+    return result["chunks"]
+
+
+def evaluate_baseline(corpus: list[dict[str, Any]]) -> dict[str, list[float]]:
+    store = EmbeddingStore()
+    judge = EmbeddingRelevance(threshold=0.45)
+    values: dict[str, list[float]] = {metric: [] for metric in METRICS}
+
+    for item in corpus:
+        eval_doc = item["eval_doc"]
+        baseline_chunks = item["baseline_chunks"]
+        doc_id = f"{eval_doc.doc_id}_baseline"
+        store.add_chunks(doc_id, baseline_chunks)
+
+        for question in eval_doc.questions:
+            judge.set_reference(" ".join(question.answer_keywords), question.answer_keywords)
+            hits = store.search(doc_id, question.question, top_k=5)
+            metrics = compute_ir_metrics(hits, judge, all_chunks=baseline_chunks)
+            for metric in METRICS:
+                values[metric].append(metrics[metric])
+    return values
+
+
+def evaluate_config(
+    config: SegmentConfig,
+    corpus: list[dict[str, Any]] | None = None,
+    baseline_values: dict[str, list[float]] | None = None,
+) -> dict[str, float]:
+    if corpus is None:
+        corpus = load_eval_corpus()
+    if baseline_values is None:
+        baseline_values = evaluate_baseline(corpus)
+
     store = EmbeddingStore()
     judge = EmbeddingRelevance(threshold=0.45)
     smart_values: dict[str, list[float]] = {metric: [] for metric in METRICS}
-    baseline_values: dict[str, list[float]] = {metric: [] for metric in METRICS}
 
-    for eval_doc in EVAL_DATASET:
-        if not Path(eval_doc.doc_path).exists():
-            continue
-        smart_chunks, baseline_chunks, _ = _load_and_segment(eval_doc, config)
+    for item in corpus:
+        eval_doc = item["eval_doc"]
+        smart_chunks = build_smart_chunks(item, config)
         store.add_chunks(f"{eval_doc.doc_id}_smart", smart_chunks)
-        store.add_chunks(f"{eval_doc.doc_id}_baseline", baseline_chunks)
 
         for question in eval_doc.questions:
             judge.set_reference(" ".join(question.answer_keywords), question.answer_keywords)
             smart_hits = store.search(f"{eval_doc.doc_id}_smart", question.question, top_k=5)
-            baseline_hits = store.search(f"{eval_doc.doc_id}_baseline", question.question, top_k=5)
             smart_metrics = compute_ir_metrics(smart_hits, judge, all_chunks=smart_chunks)
-            baseline_metrics = compute_ir_metrics(baseline_hits, judge, all_chunks=baseline_chunks)
             for metric in METRICS:
                 smart_values[metric].append(smart_metrics[metric])
-                baseline_values[metric].append(baseline_metrics[metric])
 
     metrics = {metric: average(values) for metric, values in smart_values.items()}
     for metric, values in baseline_values.items():

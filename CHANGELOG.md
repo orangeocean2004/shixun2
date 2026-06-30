@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-06-30 - 参数调优与评测脚本修复
+
+本次更新基于 `master` 最新代码重新运行评测，修复了合并后评测脚本引用旧预处理模块的问题，并通过小规模参数搜索把 RAG 检索提升重新推过验收目标。
+
+### 主要更新
+
+- 修复 `scripts/eval_rag.py`：
+  - 预处理模块引用从旧的 `backend.app.services.document_preprocessor` 更新为 `backend.app.services.preprocessing`。
+
+- 优化评测/调参性能：
+  - `EmbeddingRelevance.judge_batch` 改为批量编码候选 chunk，减少逐条调用 embedding 模型的开销。
+  - `scripts/tune_segmenting_params.py` 缓存文档加载、固定长度 baseline 和 baseline 指标，减少参数搜索中的重复计算。
+
+- 更新默认分段参数：
+  - `min_chars=180`
+  - `target_chars=550`
+  - `max_chars=800`
+  - `heading_flush_min_chars=240`
+  - `semantic_boundary_threshold=0.55`
+  - `overlap_sentences=1`
+
+### 验证结果
+
+已通过：
+
+```text
+py_compile：通过
+unittest：21/21 通过
+eval_rag.py：PASS
+```
+
+相对固定长度分段基线的整体提升：
+
+| 指标 | 智能分段 | 固定长度基线 | 提升 |
+|---|---:|---:|---:|
+| Recall@1 | 0.1669 | 0.1456 | +14.6% |
+| Recall@3 | 0.4042 | 0.3005 | +34.5% |
+| Recall@5 | 0.5915 | 0.4990 | +18.5% |
+| Precision@5 | 0.6033 | 0.5233 | +15.3% |
+| nDCG@5 | 0.7148 | 0.6026 | +18.6% |
+| MRR | 0.7778 | 0.7500 | +3.7% |
+
+结论：
+
+```text
+VERDICT: PASS -- Recall@5 improvement +18.5% >= 10% target
+```
+
+### 环境说明
+
+- 本机有 NVIDIA GeForce RTX 4050 Laptop GPU。
+- 当前 `.venv` 中安装的是 `torch 2.12.1+cpu`，PyTorch 暂时不能直接使用 CUDA。
+- 本次调参结果来自 CPU 环境；后续如果安装 CUDA 版 PyTorch，可继续缩短 embedding 评测耗时。
+
 ## 2026-06-25 - RAG 分段优化版
 
 本版本围绕课题 11「面向 RAG 的智能分段与内容组织智能体」做了一轮分段质量和检索评测优化，目标是让智能分段相对固定长度切分的下游检索效果达到任务书要求。

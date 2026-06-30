@@ -24,7 +24,7 @@ from backend.app.services.evaluation import (
     compute_ir_metrics,
     fixed_length_segment,
 )
-from backend.app.services.document_preprocessor import preprocess_document_blocks
+from backend.app.services.preprocessing import preprocess_document_blocks
 from backend.app.services.retrieval import EmbeddingStore
 from backend.tests.eval_dataset import EVAL_DATASET, EvalDocument, EvalQuestion
 
