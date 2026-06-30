@@ -221,3 +221,6 @@ data/rag/**
 
 *.sqlite
 *.db
+data/rag/**data/images/
+data/rag/
+=1.0.15

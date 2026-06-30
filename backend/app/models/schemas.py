@@ -20,6 +20,8 @@ class RetrievedChunk(BaseModel):
     strategy_info: dict[str, Any] = Field(default_factory=dict)
     label: list[str] = Field(default_factory=list)
     entity_tags: list[str] = Field(default_factory=list)
+    section_titles: list[str] = Field(default_factory=list)
+    retrieval_text: str = ""
     score: float | None = None
 
 
@@ -41,6 +43,7 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     question: str
     top_k: int
+    answer: str = ""
     chunks: list[RetrievedChunk]
 
 

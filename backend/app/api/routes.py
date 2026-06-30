@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
 
 from backend.app.core.config import (
     ALLOWED_UPLOAD_SUFFIXES,
@@ -116,7 +116,43 @@ def query_retrieved_chunks(payload: QueryRequest) -> QueryResponse:
             question=payload.question,
             top_k=top_k,
         )
-        return QueryResponse(**result)
+        answer = ""
+
+        # 尝试用 LLM 根据检索到的 chunk 生成回答
+        try:
+            from backend.app.core.config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
+            from backend.app.services.organizer.model_client import LLMClient
+
+            llm = LLMClient(
+                api_key=OPENAI_API_KEY,
+                base_url=OPENAI_BASE_URL,
+                model=LLM_MODEL,
+            )
+            if llm.is_available and result.get("chunks"):
+                context_parts = []
+                for c in result["chunks"]:
+                    title = " > ".join(c.get("title_path", [])) or "无标题"
+                    context_parts.append(f"[{title}]\n{c.get('content', '')[:800]}")
+                context = "\n\n---\n\n".join(context_parts)
+
+                answer = llm.generate(
+                    f"根据以下文档片段回答问题。如果片段中没有足够信息，请如实说明。\n\n"
+                    f"文档片段：\n{context}\n\n"
+                    f"问题：{payload.question}\n\n"
+                    f"回答：",
+                    system_prompt="你是基于文档的问答助手。只根据提供的文档片段回答，不添加外部知识。",
+                    temperature=0.3,
+                    max_tokens=512,
+                ).strip()
+        except Exception:
+            pass  # LLM 生成失败不影响检索结果返回
+
+        return QueryResponse(
+            question=payload.question,
+            top_k=top_k or DEFAULT_RETRIEVE_TOP_K,
+            answer=answer,
+            chunks=result.get("chunks", []),
+        )
     except RAGValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RAGDocumentNotFoundError as exc:
@@ -140,6 +176,122 @@ def get_all_chunks(doc_id: str = Query(..., min_length=1)) -> ChunkListResponse:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"获取 chunks 失败：{exc}") from exc
+
+
+@router.get("/api/images/{doc_id}/{filename}")
+def serve_image(doc_id: str, filename: str):
+    """提供从文档中提取的图片。"""
+    from pathlib import Path as _Path
+    from fastapi.responses import FileResponse
+
+    image_path = _Path(__file__).resolve().parents[3] / "data" / "images" / doc_id / filename
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="图片不存在")
+    return FileResponse(str(image_path))
+
+
+@router.post("/api/synthesize-qa")
+def synthesize_qa(payload: dict = Body(...)):
+    import json
+    import re
+
+    from backend.app.core.config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
+    from backend.app.services.organizer.model_client import LLMClient
+
+    chunks = payload.get("chunks", [])
+    if not chunks:
+        raise HTTPException(status_code=400, detail="chunks 不能为空")
+
+    llm = LLMClient(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, model=LLM_MODEL)
+    if not llm.is_available:
+        raise HTTPException(status_code=400, detail="请先在 core/config.py 中配置 OPENAI_API_KEY")
+
+    _system = (
+        "你是问答对生成器。根据文档片段生成1-2个问答对。"
+        "严格输出 JSON 数组：[{\"question\":\"...\",\"answer\":\"...\"}]"
+    )
+
+    qa_pairs = []
+    for chunk in chunks:
+        content = (chunk.get("content") or "")[:2000].strip()
+        if not content:
+            continue
+        title = " > ".join(chunk.get("title_path") or []) or "未分类"
+
+        raw = llm.generate(
+            prompt=f"标题：{title}\n\n内容：{content}",
+            system_prompt=_system,
+            temperature=0.7,
+            max_tokens=512,
+        )
+        if not raw:
+            continue
+
+        # 解析 LLM 返回的 JSON
+        raw = raw.strip()
+        # 去掉可能的 markdown 代码块包裹
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]
+        if raw.endswith("```"):
+            raw = raw.rsplit("\n", 1)[0]
+
+        try:
+            pairs = json.loads(raw)
+        except json.JSONDecodeError:
+            # 尝试提取 JSON 数组部分
+            m = re.search(r"\[.*\]", raw, re.DOTALL)
+            if not m:
+                continue
+            try:
+                pairs = json.loads(m.group())
+            except json.JSONDecodeError:
+                continue
+
+        if not isinstance(pairs, list):
+            continue
+
+        for pair in pairs:
+            question = (pair.get("question") or "").strip()
+            answer = (pair.get("answer") or "").strip()
+            if not question or not answer:
+                continue
+
+            # 可答性 + 忠实度
+            ans_words = set(re.findall(r"[一-鿿\w]+", answer.lower()))
+            content_words = set(re.findall(r"[一-鿿\w]+", content.lower()))
+            overlap = ans_words & content_words
+            answerable = len(overlap) / max(len(ans_words), 1)
+
+            ans_ngrams = _extract_ngrams(answer.lower(), 2)
+            if ans_ngrams:
+                faithful = sum(1 for ng in ans_ngrams if ng in content.lower()) / len(ans_ngrams)
+            else:
+                faithful = answerable
+
+            qa_pairs.append({
+                "id": f"qa_{len(qa_pairs) + 1:04d}",
+                "question": question,
+                "answer": answer,
+                "source_chunk_id": chunk.get("chunk_id", ""),
+                "title_path": chunk.get("title_path", []),
+                "answerable": answerable >= 0.3,
+                "answerable_score": round(answerable, 3),
+                "faithful": faithful >= 0.5,
+                "faithful_score": round(faithful, 3),
+                "quality_score": round((answerable + faithful) / 2, 3),
+            })
+
+    return {"qa_pairs": qa_pairs, "total": len(qa_pairs)}
+
+
+import re as _re_module
+
+def _extract_ngrams(text: str, n: int) -> list[str]:
+    """提取文本中的 N-gram 序列（字符级）。"""
+    words = _re_module.findall(r"[一-鿿\w]+", text)
+    if len(words) < n:
+        return [" ".join(words)] if words else []
+    return [" ".join(words[i:i + n]) for i in range(len(words) - n + 1)]
 
 
 def safe_doc_id(value: str) -> str:

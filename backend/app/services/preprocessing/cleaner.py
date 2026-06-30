@@ -9,11 +9,17 @@ from backend.app.services.segmenting.models import DocumentBlock
 TOC_PAGE_REF_PATTERNS = [
     re.compile(r"\t+\s*-?\s*\d+\s*-?\s*$"),
     re.compile(r"\.{2,}\s*\d+\s*$"),
+    re.compile(r"\.{4,}\s*\d+\s*$"),                 # 中文省略号……当点线
     re.compile(r"\s+-\s*\d+\s*-\s*$"),
+    re.compile(r"\s{4,}\d{1,4}\s*$"),                # 空白+页码
+    re.compile(r"^\d+(?:\.\d+)*\s+.+\s+\d{1,4}$"),   # "1.1 标题  5" 格式
 ]
 
 COVER_FIELD_PATTERN = re.compile(
-    r"^(院（系）|院\(系\)|专业|班级|学号|姓名|带队教师|指导教师|日期|年\s*\d+\s*月|\d{4}\s*年)"
+    r"^(院（系）|院\(系\)|专业|班级|学号|姓名|带队教师|指导教师|日期|"
+    r"小组|组长|成员|队员|项目名称|课题名称|课题编号|"
+    r"报告名称|关联项目|调研范围|调研时间|研发周期|"
+    r"年\s*\d+\s*月|\d{4}\s*年)"
 )
 
 
@@ -97,13 +103,48 @@ def is_toc_entry(text: str) -> bool:
 def is_cover_block(text: str) -> bool:
     stripped = text.strip()
     compact = re.sub(r"\s+", "", stripped)
-    if re.match(r"^(院（系）|院\(系\)|专业|班级|学号|姓名|带队教师|指导教师)[：:]", compact):
+
+    # 标准封面字段（含冒号）
+    if re.match(r"^(院（系）|院\(系\)|专业|班级|学号|姓名|带队教师|指导教师|"
+                r"小组|组长|成员|队员|项目名称|课题名称|课题编号|"
+                r"报告名称|关联项目|调研范围|调研时间|研发周期)[：:]", compact):
         return True
+    # 短封面字段（无冒号，如纯标签行）
     if len(stripped) <= 24 and COVER_FIELD_PATTERN.match(stripped):
         return True
+    # 标签-空白-内容-空白-. 模式（如 "小组   课题组名   ."）
+    if _looks_like_cover_label_value(stripped):
+        return True
+    # 日期
     if len(compact) <= 20 and re.match(r"^\d{4}年\d{1,2}月\d{1,2}日$", compact):
         return True
-    if len(stripped) <= 36 and re.search(r"实习|实训|总结报告|课程设计", stripped):
+    # 报告/论文标题页关键词
+    if len(stripped) <= 36 and re.search(r"实习|实训|总结报告|课程设计|开题报告", stripped):
+        return True
+    return False
+
+
+_COVER_LABEL_PATTERN = re.compile(
+    r"^(\S{1,8})\s{4,}(\S.{2,})\s{2,}[.。\d]*$"
+)
+
+_COVER_COLON_PATTERN = re.compile(
+    r"^[一-鿿\w]{1,10}[：:]\s*\S.{2,}$"
+)
+
+
+def _looks_like_cover_label_value(text: str) -> bool:
+    """检测封面标签-值行。
+
+    两种模式：
+    1. "小组   机器学习与NLP课题组    ." — 空白分隔的标签-值
+    2. "报告名称：同类开源方案调研" — 冒号分隔的标签-值
+    """
+    if len(text) > 120:
+        return False
+    if _COVER_LABEL_PATTERN.match(text):
+        return True
+    if _COVER_COLON_PATTERN.match(text):
         return True
     return False
 

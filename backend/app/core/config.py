@@ -11,6 +11,11 @@ DEFAULT_RETRIEVE_MIN_CANDIDATES = 20
 RETRIEVE_SEMANTIC_WEIGHT = 0.65
 RETRIEVE_LEXICAL_WEIGHT = 0.35
 RETRIEVE_QUALITY_PENALTY = 0.05
+# LLM 配置（替换为你的 API Key）
+OPENAI_API_KEY = "sk-d23f3f6b1e244ddcb98e8218fad8a76b"
+OPENAI_BASE_URL = "https://api.deepseek.com"
+LLM_MODEL = "deepseek-chat"
+
 CORS_ALLOW_ORIGINS = ["http://127.0.0.1:5173", "http://localhost:5173"]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

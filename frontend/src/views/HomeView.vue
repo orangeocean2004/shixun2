@@ -4,6 +4,7 @@ import ConfigPanel from '../components/ConfigPanel.vue'
 import MetricPanel from '../components/MetricPanel.vue'
 import ChunkList from '../components/ChunkList.vue'
 import { queryRetrievedChunks } from '../api/chunking'
+import { apiFetch } from '../api/client'
 import { useChunkStore } from '../stores/chunkStore'
 
 const { state, submitUpload } = useChunkStore()
@@ -16,6 +17,10 @@ const qaDocId = ref('')
 const qaLoading = ref(false)
 const qaError = ref('')
 const qaRetrievedChunks = ref([])
+const qaAnswer = ref('')
+const qaSynthesizing = ref(false)
+const qaPairs = ref([])
+const qaSynthError = ref('')
 const hasResult = computed(() => Boolean(state.result))
 const rawResultJson = computed(() => (state.result ? JSON.stringify(state.result, null, 2) : ''))
 const rawResultHighlighted = computed(() => highlightJson(rawResultJson.value))
@@ -133,11 +138,42 @@ async function runQuery() {
     })
     qaDocId.value = response.doc_id || qaDocId.value
     qaRetrievedChunks.value = response.chunks || []
+    qaAnswer.value = response.answer || ''
   } catch (error) {
     qaError.value = error?.message || '检索失败，请稍后重试。'
   } finally {
     qaLoading.value = false
   }
+}
+
+async function synthesizeQA() {
+  if (!state.result?.chunks?.length) return
+  qaSynthesizing.value = true
+  qaSynthError.value = ''
+  qaPairs.value = []
+  try {
+    const data = await apiFetch('/api/synthesize-qa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chunks: state.result.chunks }),
+    })
+    qaPairs.value = data.qa_pairs || []
+  } catch (e) {
+    qaSynthError.value = e?.message || 'QA 合成失败'
+  } finally {
+    qaSynthesizing.value = false
+  }
+}
+
+function downloadQAPairs() {
+  const lines = qaPairs.value.map(p => JSON.stringify(p)).join('\n')
+  const blob = new Blob([lines], { type: 'application/jsonl' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = (state.result?.doc_id || 'qa') + '_qa.jsonl'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function handleSubmit(payload) {
@@ -170,6 +206,15 @@ function handleSubmit(payload) {
           @click="switchTab('result')"
         >
           文档分块
+        </button>
+        <button
+          type="button"
+          class="tab-btn"
+          :class="{ active: activeTab === 'qasync' }"
+          :disabled="!hasResult"
+          @click="switchTab('qasync')"
+        >
+          QA 合成
         </button>
         <button
           type="button"
@@ -211,7 +256,7 @@ function handleSubmit(payload) {
 
         <div class="result-main">
           <MetricPanel :statistics="state.result.statistics" :strategy="state.result.strategy" />
-          <ChunkList ref="resultChunkListRef" :chunks="state.result.chunks" />
+          <ChunkList ref="resultChunkListRef" :chunks="state.result.chunks" :doc-id="state.result?.doc_id || ''" />
         </div>
       </section>
 
@@ -231,6 +276,11 @@ function handleSubmit(payload) {
 
       <p v-if="qaError" class="error inline-error">{{ qaError }}</p>
 
+      <div v-if="qaAnswer" class="qa-answer-box">
+        <h3>回答</h3>
+        <p>{{ qaAnswer }}</p>
+      </div>
+
       <div v-if="qaRetrievedChunks.length" class="qa-result-list">
         <h3>已检索 chunks（{{ qaRetrievedChunks.length }}）</h3>
         <article v-for="chunk in qaRetrievedChunks" :key="chunk.chunk_id" class="qa-item">
@@ -246,10 +296,51 @@ function handleSubmit(payload) {
         </article>
 
         <h3>详细信息</h3>
-        <ChunkList ref="qaChunkListRef" :chunks="qaRetrievedChunks" />
+        <ChunkList ref="qaChunkListRef" :chunks="qaRetrievedChunks" :doc-id="qaDocId || state.result?.doc_id || ''" />
       </div>
 
       <p v-else-if="!qaLoading" class="empty">暂无检索结果</p>
+    </section>
+
+    <section v-else-if="activeTab === 'qasync'" class="panel qa-synth-panel">
+      <div class="qa-synth-head">
+        <h2>QA 对合成</h2>
+        <button
+          type="button"
+          class="synth-btn"
+          :disabled="qaSynthesizing || !hasResult"
+          @click="synthesizeQA"
+        >
+          {{ qaSynthesizing ? '生成中...' : '生成 QA 对' }}
+        </button>
+      </div>
+      <p v-if="!hasResult" class="empty">请先在"文档分块"中上传文档。</p>
+      <p v-if="qaSynthError" class="error">{{ qaSynthError }}</p>
+      <div v-if="qaPairs.length" class="qa-pairs-list">
+        <div class="qa-pairs-actions">
+          <span>共 {{ qaPairs.length }} 个 QA 对</span>
+          <button type="button" class="download-btn" @click="downloadQAPairs">下载 JSONL</button>
+        </div>
+        <div
+          v-for="pair in qaPairs"
+          :key="pair.id"
+          class="qa-pair-card"
+        >
+          <div class="qa-meta">
+            <span :class="pair.answerable ? 'tag-ok' : 'tag-warn'">
+              {{ pair.answerable ? '可答' : '存疑' }}
+            </span>
+            <span :class="pair.faithful ? 'tag-ok' : 'tag-warn'">
+              {{ pair.faithful ? '忠实' : '待核' }}
+            </span>
+            <span class="qa-score">质量: {{ pair.quality_score }}</span>
+            <span class="qa-source">{{ pair.source_chunk_id }}</span>
+          </div>
+          <p class="qa-question"><strong>Q:</strong> {{ pair.question }}</p>
+          <p class="qa-answer"><strong>A:</strong> {{ pair.answer }}</p>
+        </div>
+      </div>
+      <p v-else-if="!qaSynthesizing && hasResult" class="empty">点击按钮生成 QA 对。</p>
     </section>
 
     <section v-else class="panel">
@@ -451,6 +542,27 @@ function handleSubmit(payload) {
   box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.28);
 }
 
+.qa-answer-box {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.qa-answer-box h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.qa-answer-box p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
 .inline-error {
   margin-bottom: 10px;
 }
@@ -587,5 +699,121 @@ function handleSubmit(payload) {
   .qa-item {
     flex-direction: column;
   }
+}
+
+.qa-synth-panel {
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--bg-surface);
+}
+
+.qa-synth-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.qa-synth-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.synth-btn {
+  padding: 8px 18px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #7c3aed, #4f46e5);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.synth-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.synth-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+}
+
+.qa-pairs-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.download-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.download-btn:hover {
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.qa-pair-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: var(--bg-surface-2);
+}
+
+.qa-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.tag-ok {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.tag-warn {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.qa-score {
+  color: var(--text-muted);
+}
+
+.qa-source {
+  color: var(--text-muted);
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.qa-question {
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.qa-answer {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 </style>

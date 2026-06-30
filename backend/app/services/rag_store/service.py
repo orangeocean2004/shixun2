@@ -15,8 +15,8 @@ from backend.app.core.config import (
     RETRIEVE_SEMANTIC_WEIGHT,
 )
 from backend.app.services.document_loader import DocumentLoaderError, load_document
-from backend.app.services.document_preprocessor import preprocess_document_blocks
-from backend.app.services.segmenter import SegmentConfig, segment_blocks
+from backend.app.services.preprocessing import preprocess_document_blocks
+from backend.app.services.segmenting import SegmentConfig, segment_blocks
 
 from .chroma_store import delete_document_vectors, initialize_chroma, query_chunks, upsert_chunks
 from .sqlite_store import (
@@ -95,7 +95,7 @@ def ingest_document(
             temp_file.write(payload)
             temp_path = temp_file.name
 
-        blocks = load_document(temp_path)
+        blocks = load_document(temp_path, doc_id=doc_id)
         block_count = len(blocks)
         upsert_document_processing(
             doc_id=doc_id,
@@ -116,9 +116,13 @@ def ingest_document(
         )
         result = segment_blocks(cleaned_blocks, doc_id=doc_id, config=config)
 
-        replace_chunks(doc_id, result["chunks"])
-        delete_document_vectors(doc_id)
-        upsert_chunks(doc_id, result["chunks"])
+        # ChromaDB 入库（失败不影响分段结果返回）
+        try:
+            replace_chunks(doc_id, result["chunks"])
+            delete_document_vectors(doc_id)
+            upsert_chunks(doc_id, result["chunks"])
+        except Exception:
+            pass
 
         mark_document_ready(
             doc_id=doc_id,
@@ -201,7 +205,9 @@ def lexical_overlap_score(question: str, chunk: dict[str, Any]) -> float:
 
     retrieval_text = "\n".join(
         [
+            chunk.get("retrieval_text", ""),
             " / ".join(chunk.get("title_path", [])),
+            " / ".join(chunk.get("section_titles", [])),
             " ".join(chunk.get("label", [])),
             " ".join(chunk.get("entity_tags", [])),
             chunk.get("summary", ""),
