@@ -70,18 +70,24 @@ onMounted(() => {
 <template>
   <div class="settings-layout">
     <section class="panel settings-panel">
-      <h2>模型设置</h2>
-      <p class="hint">修改后会由后端持久化为 JSON，并在运行时用于问答与 QA 合成。</p>
+      <div class="settings-head">
+        <div>
+          <h2 class="panel-title">模型设置</h2>
+          <p class="panel-subtitle">修改后会由后端持久化为 JSON，并在问答检索与 QA 合成时生效。</p>
+        </div>
+        <span class="ui-pill">运行时配置</span>
+      </div>
 
-      <p v-if="loading" class="loading">正在加载设置...</p>
-      <p v-if="error" class="error">{{ error }}</p>
-      <p v-if="success" class="success">{{ success }}</p>
+      <p v-if="loading" class="ui-status ui-status--loading">正在加载设置...</p>
+      <p v-if="error" class="ui-status ui-status--error">{{ error }}</p>
+      <p v-if="success" class="ui-status ui-status--success">{{ success }}</p>
 
       <form class="settings-form" @submit.prevent="saveSettings">
-        <label class="field" for="api-key">
-          <span>OPENAI_API_KEY</span>
+        <label class="ui-field">
+          <span class="ui-field-title">API Key</span>
+          <span class="ui-field-help">OPENAI_API_KEY</span>
           <input
-            id="api-key"
+            class="ui-input"
             v-model="form.OPENAI_API_KEY"
             type="password"
             placeholder="sk-..."
@@ -89,20 +95,22 @@ onMounted(() => {
           />
         </label>
 
-        <label class="field" for="base-url">
-          <span>OPENAI_BASE_URL</span>
+        <label class="ui-field">
+          <span class="ui-field-title">模型服务地址</span>
+          <span class="ui-field-help">OPENAI_BASE_URL</span>
           <input
-            id="base-url"
+            class="ui-input"
             v-model="form.OPENAI_BASE_URL"
             type="text"
             placeholder="https://api.deepseek.com"
           />
         </label>
 
-        <label class="field" for="model-name">
-          <span>LLM_MODEL</span>
+        <label class="ui-field">
+          <span class="ui-field-title">模型名称</span>
+          <span class="ui-field-help">LLM_MODEL</span>
           <input
-            id="model-name"
+            class="ui-input"
             v-model="form.LLM_MODEL"
             type="text"
             placeholder="deepseek-chat"
@@ -110,10 +118,10 @@ onMounted(() => {
         </label>
 
         <div class="actions">
-          <button type="button" class="ghost-btn" :disabled="loading || saving" @click="loadSettings">
+          <button type="button" class="ui-button ui-button--secondary" :disabled="loading || saving" @click="loadSettings">
             重新加载
           </button>
-          <button type="submit" class="save-btn" :disabled="loading || saving">
+          <button type="submit" class="ui-button ui-button--primary" :disabled="loading || saving">
             {{ saving ? '保存中...' : '保存设置' }}
           </button>
         </div>
@@ -129,63 +137,24 @@ onMounted(() => {
   gap: 16px;
 }
 
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
-  background: var(--bg-surface);
-  box-shadow: var(--shadow-soft);
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.panel:hover {
-  border-color: var(--border-strong);
-}
-
-.settings-panel h2 {
-  margin: 0;
-}
-
-.hint {
-  margin: 8px 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
+.settings-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .settings-form {
-  margin-top: 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.field > span {
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.field input {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 14px;
-  background: var(--bg-surface-2);
-  color: var(--text-primary);
-}
-
-.field input::placeholder {
-  color: var(--text-muted);
-}
-
-.field input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.25);
+  gap: 14px;
 }
 
 .actions {
@@ -193,53 +162,16 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.ghost-btn,
-.save-btn {
-  border: 1px solid rgba(var(--accent-rgb), 0.38);
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.26), rgba(var(--accent-rgb), 0.12));
-  padding: 8px 12px;
-  font-size: 14px;
-  color: #eaf2ff;
-  font-weight: 600;
-  cursor: pointer;
-}
+@media (max-width: 720px) {
+  .actions {
+    justify-content: stretch;
+  }
 
-.ghost-btn:hover:not(:disabled),
-.save-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: #ffffff;
-  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.4), rgba(var(--accent-rgb), 0.2));
-}
-
-.ghost-btn:disabled,
-.save-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.loading {
-  margin: 12px 0 0;
-  color: var(--accent);
-}
-
-.error {
-  margin: 12px 0 0;
-  color: var(--danger);
-  background: var(--danger-soft);
-  border: 1px solid rgba(230, 127, 104, 0.5);
-  border-radius: 8px;
-  padding: 10px;
-}
-
-.success {
-  margin: 12px 0 0;
-  color: #6fe1bc;
-  background: rgba(111, 225, 188, 0.1);
-  border: 1px solid rgba(111, 225, 188, 0.35);
-  border-radius: 8px;
-  padding: 10px;
+  .actions .ui-button {
+    width: 100%;
+  }
 }
 </style>
