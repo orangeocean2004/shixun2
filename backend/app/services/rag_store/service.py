@@ -114,6 +114,12 @@ def ingest_document(
             overlap_sentences=overlap_sentences,
             keyword_strategy=keyword_strategy,
         )
+        # 自适应：如果使用默认参数，根据文档总长度自动调整
+        total_chars = sum(len(b.text) for b in cleaned_blocks)
+        config = SegmentConfig.auto(total_chars)
+        # 保留用户显式设置的关键词策略
+        config.keyword_strategy = keyword_strategy
+        config.overlap_sentences = overlap_sentences
         result = segment_blocks(cleaned_blocks, doc_id=doc_id, config=config)
 
         # ChromaDB 入库（失败不影响分段结果返回）

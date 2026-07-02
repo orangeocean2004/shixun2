@@ -26,9 +26,9 @@ def parse_args() -> argparse.Namespace:
         help="Output JSON file path. Defaults to data/outputs/<input_stem>_chunks.json",
     )
     parser.add_argument("--doc-id", help="Document ID used as chunk_id prefix. Defaults to input file name.")
-    parser.add_argument("--min-chars", type=int, default=300, help="Minimum chunk size in characters.")
-    parser.add_argument("--target-chars", type=int, default=900, help="Preferred chunk size in characters.")
-    parser.add_argument("--max-chars", type=int, default=1200, help="Maximum chunk size in characters.")
+    parser.add_argument("--min-chars", type=int, default=None, help="Minimum chunk size. Auto-detected from doc length if not set.")
+    parser.add_argument("--target-chars", type=int, default=None, help="Preferred chunk size. Auto-detected from doc length if not set.")
+    parser.add_argument("--max-chars", type=int, default=None, help="Maximum chunk size. Auto-detected from doc length if not set.")
     parser.add_argument("--overlap-sentences", type=int, default=1, help="Sentence overlap when splitting long chunks.")
     parser.add_argument(
         "--clean-document",
@@ -44,12 +44,15 @@ def main() -> None:
     output_path = Path(args.output) if args.output else default_output_path(input_path)
     doc_id = args.doc_id or safe_doc_id(input_path.stem)
 
-    config = SegmentConfig(
-        min_chars=args.min_chars,
-        target_chars=args.target_chars,
-        max_chars=args.max_chars,
-        overlap_sentences=args.overlap_sentences,
-    )
+    # 仅当用户显式指定参数时才构建自定义 config，否则传 None 触发自适应
+    config = None
+    if args.min_chars is not None or args.target_chars is not None or args.max_chars is not None:
+        config = SegmentConfig(
+            min_chars=args.min_chars or 300,
+            target_chars=args.target_chars or 900,
+            max_chars=args.max_chars or 1200,
+            overlap_sentences=args.overlap_sentences,
+        )
 
     blocks = load_document(input_path)
     preprocess_report = None

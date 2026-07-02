@@ -22,7 +22,7 @@ from typing import Any
 
 import numpy as np
 
-from backend.app.services.embedding import EmbeddingEncoder, get_default_encoder
+from .embedding import EmbeddingEncoder, get_default_encoder
 
 
 class EmbeddingStore:

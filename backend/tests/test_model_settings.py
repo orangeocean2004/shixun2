@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.app.services.model_settings import initialize_model_settings, update_model_settings
+from backend.app.core.model_settings import initialize_model_settings, update_model_settings
 
 
 class ModelSettingsTest(unittest.TestCase):

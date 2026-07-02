@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from backend.app.services.embedding import EmbeddingEncoder, get_default_encoder
+from backend.app.services.retrieval.embedding import EmbeddingEncoder, get_default_encoder
 
 
 # ── Relevance judge ─────────────────────────────────────

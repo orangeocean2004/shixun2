@@ -15,14 +15,22 @@ from backend.app.core.config import (
 )
 from backend.app.models.schemas import (
     ChunkListResponse,
+    EvaluateRequest,
+    EvaluateResponse,
     ModelSettingsPayload,
     ModelSettingsResponse,
+    OrganizeChunkInput,
+    OrganizeRequest,
+    OrganizeResponse,
     QueryRequest,
     QueryResponse,
     SegmentUploadResponse,
+    StrategiesResponse,
+    StrategyInfo,
+    StrategyMetrics,
 )
 from backend.app.services.document_loader import DocumentLoaderError
-from backend.app.services.model_settings import get_model_settings, update_model_settings
+from backend.app.core.model_settings import get_model_settings, update_model_settings
 from backend.app.services.qa_quality import get_qa_quality_evaluator
 from backend.app.services.rag_store import ingest_document, list_all_chunks, retrieve_chunks
 from backend.app.services.rag_store.service import (
@@ -294,6 +302,192 @@ def synthesize_qa(payload: dict = Body(...)):
             })
 
     return {"qa_pairs": qa_pairs, "total": len(qa_pairs)}
+
+
+# ── /strategies ──────────────────────────────────────────
+
+
+@router.get("/api/strategies", response_model=StrategiesResponse)
+def list_strategies() -> StrategiesResponse:
+    """列出可用的分段策略、关键词策略和默认配置。"""
+    from backend.app.services.segmenting import SegmentConfig
+
+    config = SegmentConfig()
+    return StrategiesResponse(
+        segmentation_strategies=[
+            StrategyInfo(
+                name="smart",
+                label="Smart (heading+semantic+protect+overlap)",
+                description="标题感知 + 语义边界 + 特殊块保护 + 上下文重叠，最终智能策略",
+            ),
+            StrategyInfo(
+                name="heading",
+                label="Heading-based (heading+length only)",
+                description="仅标题边界 + 长度控制，不做语义检测和重叠，验证结构信息价值",
+            ),
+            StrategyInfo(
+                name="fixed",
+                label="Fixed-length (512-char uniform)",
+                description="固定 512 字符均匀切分，无结构感知，作为基线对照",
+            ),
+        ],
+        keyword_strategies=list(list_keyword_strategies()),
+        default_config={
+            "min_chars": config.min_chars,
+            "target_chars": config.target_chars,
+            "max_chars": config.max_chars,
+            "overlap_sentences": config.overlap_sentences,
+            "enable_semantic_boundary": config.enable_semantic_boundary,
+            "semantic_boundary_threshold": config.semantic_boundary_threshold,
+            "keyword_strategy": config.keyword_strategy,
+        },
+    )
+
+
+# ── /organize ────────────────────────────────────────────
+
+
+@router.post("/api/organize", response_model=OrganizeResponse)
+def organize_chunks(payload: OrganizeRequest) -> OrganizeResponse:
+    """对已有 chunks 独立执行内容组织（标签、摘要、实体）。"""
+    from backend.app.services.organizer.organizer import ContentOrganizer
+
+    if not payload.chunks:
+        raise HTTPException(status_code=400, detail="chunks 不能为空")
+
+    organizer = ContentOrganizer()
+    chunk_dicts = [{"chunk_id": c.chunk_id, "content": c.content} for c in payload.chunks]
+    results, doc_summary = organizer.organize_batch(chunk_dicts, doc_id=payload.doc_id)
+
+    organized = []
+    for inp, res in zip(payload.chunks, results):
+        organized.append({
+            "chunk_id": inp.chunk_id,
+            "tags": res.tags,
+            "summary": res.summary,
+            "entity_labels": res.entity_labels,
+        })
+
+    return OrganizeResponse(
+        doc_id=payload.doc_id,
+        doc_summary=doc_summary,
+        chunks=organized,
+    )
+
+
+# ── /evaluate ────────────────────────────────────────────
+
+
+def _avg(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+@router.post("/api/evaluate", response_model=EvaluateResponse)
+def evaluate_document(payload: EvaluateRequest) -> EvaluateResponse:
+    """对已上传的文档运行三策略对比评测，返回检索指标。"""
+    from backend.app.services.evaluation import (
+        EmbeddingRelevance,
+        compute_ir_metrics,
+        fixed_length_segment,
+        heading_based_segment,
+    )
+    from backend.app.services.rag_store.sqlite_store import get_chunks_by_doc, get_document
+    from backend.app.services.retrieval import EmbeddingStore
+    from backend.app.services.segmenting import SegmentConfig, segment_text
+
+    # 验证文档存在且就绪
+    doc = get_document(payload.doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"文档不存在：{payload.doc_id}")
+    if doc["status"] != "ready":
+        raise HTTPException(status_code=409, detail=f"文档未就绪，当前状态：{doc['status']}")
+
+    doc_id = payload.doc_id
+
+    # 从已存储的 chunks 重建原始文本
+    stored_chunks = get_chunks_by_doc(doc_id)
+    if not stored_chunks:
+        raise HTTPException(status_code=404, detail="该文档没有已分段的 chunks")
+
+    raw_text = "\n\n".join(c.get("content", "") for c in stored_chunks)
+
+    config = SegmentConfig()
+    store = EmbeddingStore()
+    judge = EmbeddingRelevance(threshold=0.45)
+
+    # 三种策略分段
+    smart_result = segment_text(raw_text, doc_id=doc_id, config=config)
+    smart_chunks = smart_result["chunks"]
+
+    heading_objs = heading_based_segment(
+        raw_text, doc_id=f"{doc_id}_heading",
+        min_chars=config.min_chars, target_chars=config.target_chars,
+        max_chars=config.max_chars,
+    )
+    heading_chunks = [
+        {"chunk_id": c.chunk_id, "content": c.content, "title_path": c.title_path,
+         "chunk_type": c.chunk_type, "char_count": c.char_count,
+         "source_refs": c.source_refs, "quality_flags": c.quality_flags}
+        for c in heading_objs
+    ]
+
+    fixed_objs = fixed_length_segment(raw_text, doc_id=f"{doc_id}_fixed")
+    fixed_chunks = [
+        {"chunk_id": c.chunk_id, "content": c.content, "title_path": c.title_path,
+         "chunk_type": c.chunk_type, "char_count": c.char_count,
+         "source_refs": c.source_refs, "quality_flags": c.quality_flags}
+        for c in fixed_objs
+    ]
+
+    all_strategies = [
+        ("smart", smart_chunks),
+        ("heading", heading_chunks),
+        ("fixed", fixed_chunks),
+    ]
+
+    # 评测查询 — 基于文档内容生成
+    first_content = stored_chunks[0].get("content", "") if stored_chunks else ""
+    test_queries = [
+        "本文档的主要内容是什么？",
+        "文档中提到了哪些关键数据或指标？",
+        "文档的核心结论或要点是什么？",
+    ]
+
+    strategy_results: list[dict] = []
+    for strategy_name, chunks in all_strategies:
+        store.add_chunks(f"{doc_id}_{strategy_name}", chunks)
+
+        metrics_accum: dict[str, list[float]] = {
+            "recall@1": [], "recall@3": [], "recall@5": [],
+            "precision@5": [], "ndcg@5": [], "mrr": [],
+        }
+
+        for query in test_queries:
+            ref_text = chunks[0]["content"][:500] if chunks else query
+            judge.set_reference(ref_text, [])
+            hits = store.search(f"{doc_id}_{strategy_name}", query, top_k=payload.top_k)
+            m = compute_ir_metrics(hits, judge, all_chunks=chunks)
+            for key in metrics_accum:
+                metrics_accum[key].append(m.get(key, 0.0))
+
+        avg_chunk_size = sum(c.get("char_count", 0) for c in chunks) / max(1, len(chunks))
+        strategy_results.append({
+            "strategy": strategy_name,
+            "chunk_count": len(chunks),
+            "avg_chunk_size": round(avg_chunk_size, 1),
+            "recall_at_1": round(_avg(metrics_accum["recall@1"]), 4),
+            "recall_at_3": round(_avg(metrics_accum["recall@3"]), 4),
+            "recall_at_5": round(_avg(metrics_accum["recall@5"]), 4),
+            "precision_at_5": round(_avg(metrics_accum["precision@5"]), 4),
+            "ndcg_at_5": round(_avg(metrics_accum["ndcg@5"]), 4),
+            "mrr": round(_avg(metrics_accum["mrr"]), 4),
+        })
+
+    return EvaluateResponse(
+        doc_id=doc_id,
+        top_k=payload.top_k,
+        strategies=strategy_results,
+    )
 
 
 def safe_doc_id(value: str) -> str:

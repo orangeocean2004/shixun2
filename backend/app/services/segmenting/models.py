@@ -43,6 +43,37 @@ class SegmentConfig:
         "",
     )
 
+    @classmethod
+    def auto(cls, total_chars: int) -> "SegmentConfig":
+        """根据文档总长度自动确定最优分段参数。
+
+        短文档用小 chunk 保证检索精度，长文档用大 chunk 避免过度碎片化。
+        """
+        if total_chars <= 0:
+            return cls()
+
+        # 按文档长度分档
+        if total_chars < 3_000:
+            target = 300
+        elif total_chars < 10_000:
+            target = 450
+        elif total_chars < 50_000:
+            target = 650
+        elif total_chars < 200_000:
+            target = 850
+        else:
+            target = 1100
+
+        return cls(
+            min_chars=max(120, target // 2),
+            target_chars=target,
+            max_chars=target * 2,
+            heading_flush_min_chars=max(120, target // 3),
+            overlap_sentences=1,
+            enable_semantic_boundary=True,
+            semantic_boundary_threshold=0.55,
+        )
+
 
 @dataclass
 class DocumentBlock:

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""RAG segmentation evaluation: smart vs fixed-length baseline.
+"""RAG segmentation evaluation: smart vs fixed-length vs heading-based baseline.
 
-Uses embedding-based retrieval (EmbeddingStore) and semantic relevance
-(EmbeddingRelevance) to fairly compare segmentation strategies without
-the length bias inherent in TF-IDF and keyword matching.
+Three-strategy comparison required by the development plan:
+- Smart:     heading + semantic boundary + special block protection + overlap
+- Heading:   heading + length control only (no semantic boundary, no overlap)
+- Fixed:     uniform 512-char chunks, no structure awareness
 
 Usage:
     python scripts/eval_rag.py
@@ -23,27 +24,38 @@ from backend.app.services.evaluation import (
     EmbeddingRelevance,
     compute_ir_metrics,
     fixed_length_segment,
+    heading_based_segment,
 )
 from backend.app.services.preprocessing import preprocess_document_blocks
 from backend.app.services.retrieval import EmbeddingStore
 from backend.tests.eval_dataset import EVAL_DATASET, EvalDocument, EvalQuestion
 
 
+# ── Strategy labels ─────────────────────────────────────
+
+STRATEGIES = ["smart", "heading", "fixed"]
+STRATEGY_LABELS = {
+    "smart":   "Smart (heading+semantic+protect+overlap)",
+    "heading": "Heading-based (heading+length only)",
+    "fixed":   "Fixed-length (512-char uniform)",
+}
+
 # ── Helpers ──────────────────────────────────────────────
 
 def _load_and_segment(
     eval_doc: EvalDocument,
     config: SegmentConfig,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
-    """Load a document and segment it with both smart and baseline methods.
+) -> tuple[dict[str, list[dict[str, Any]]], str]:
+    """Load a document and segment it with all three strategies.
 
-    Returns: (smart_chunks, baseline_chunks, raw_text)
+    Returns: (strategy_chunks_dict, raw_text)
+        strategy_chunks_dict: {"smart": [...], "heading": [...], "fixed": [...]}
     """
 
     doc_path = Path(eval_doc.doc_path)
     suffix = doc_path.suffix.lower()
 
-    # Load
+    # ── Load document ──────────────────────────────────
     blocks = None
     if suffix in (".txt", ".md"):
         raw_text = doc_path.read_text(encoding="utf-8")
@@ -52,32 +64,52 @@ def _load_and_segment(
         cleaned, _ = preprocess_document_blocks(blocks)
         raw_text = "\n\n".join(b.text for b in cleaned)
 
-    # Smart segmentation
+    strategy_chunks: dict[str, list[dict[str, Any]]] = {}
+
+    # ── Smart segmentation (full pipeline) ──────────────
     if blocks is not None and suffix not in (".txt", ".md"):
         cleaned, _ = preprocess_document_blocks(blocks)
         smart_result = segment_blocks(cleaned, doc_id=eval_doc.doc_id, config=config)
     else:
         smart_result = segment_text(raw_text, doc_id=eval_doc.doc_id, config=config)
-    smart_chunks = smart_result["chunks"]
+    strategy_chunks["smart"] = smart_result["chunks"]
 
-    # Baseline (fixed-length) segmentation
-    baseline_chunk_objects = fixed_length_segment(
+    # ── Heading-based baseline (structure only) ─────────
+    heading_chunk_objects = heading_based_segment(
+        raw_text,
+        doc_id=f"{eval_doc.doc_id}_heading",
+        min_chars=config.min_chars,
+        target_chars=config.target_chars,
+        max_chars=config.max_chars,
+    )
+    strategy_chunks["heading"] = _chunks_to_dicts(heading_chunk_objects)
+
+    # ── Fixed-length baseline (no structure) ────────────
+    fixed_chunk_objects = fixed_length_segment(
         raw_text, doc_id=f"{eval_doc.doc_id}_fixed"
     )
-    baseline_chunks = [
-        {
-            "chunk_id": c.chunk_id,
-            "content": c.content,
-            "title_path": c.title_path,
-            "chunk_type": c.chunk_type,
-            "char_count": c.char_count,
-            "source_refs": c.source_refs,
-            "quality_flags": c.quality_flags,
-        }
-        for c in baseline_chunk_objects
-    ]
+    strategy_chunks["fixed"] = _chunks_to_dicts(fixed_chunk_objects)
 
-    return smart_chunks, baseline_chunks, raw_text
+    return strategy_chunks, raw_text
+
+
+def _chunks_to_dicts(chunk_objects: list[Any]) -> list[dict[str, Any]]:
+    """Convert Chunk dataclass objects to dicts for EmbeddingStore."""
+    result: list[dict[str, Any]] = []
+    for c in chunk_objects:
+        if isinstance(c, dict):
+            result.append(c)
+        else:
+            result.append({
+                "chunk_id": c.chunk_id,
+                "content": c.content,
+                "title_path": c.title_path,
+                "chunk_type": c.chunk_type,
+                "char_count": c.char_count,
+                "source_refs": c.source_refs,
+                "quality_flags": c.quality_flags,
+            })
+    return result
 
 
 # ── Runner ───────────────────────────────────────────────
@@ -98,59 +130,59 @@ def run_evaluation() -> dict[str, Any]:
         print(f"Document: {eval_doc.doc_id}")
         print(f"{'='*60}")
 
-        # Segment
-        smart_chunks, baseline_chunks, _ = _load_and_segment(eval_doc, config)
-        print(
-            f"  Smart:    {len(smart_chunks)} chunks, "
-            f"avg {sum(c['char_count'] for c in smart_chunks) / max(1, len(smart_chunks)):.0f}c"
-        )
-        print(
-            f"  Baseline: {len(baseline_chunks)} chunks, "
-            f"avg {sum(c['char_count'] for c in baseline_chunks) / max(1, len(baseline_chunks)):.0f}c"
-        )
+        # Segment with all three strategies
+        strategy_chunks, _ = _load_and_segment(eval_doc, config)
+        for strategy in STRATEGIES:
+            chunks = strategy_chunks[strategy]
+            print(
+                f"  {STRATEGY_LABELS[strategy]}: "
+                f"{len(chunks)} chunks, "
+                f"avg {sum(c['char_count'] for c in chunks) / max(1, len(chunks)):.0f}c"
+            )
 
-        # Index with embedding store
-        store.add_chunks(f"{eval_doc.doc_id}_smart", smart_chunks)
-        store.add_chunks(f"{eval_doc.doc_id}_baseline", baseline_chunks)
+        # Index all strategies
+        for strategy in STRATEGIES:
+            store.add_chunks(f"{eval_doc.doc_id}_{strategy}", strategy_chunks[strategy])
 
+        # Per-question evaluation
         doc_results: dict[str, list[dict[str, float]]] = {
-            "smart": [],
-            "baseline": [],
+            strategy: [] for strategy in STRATEGIES
         }
 
         for qi, question in enumerate(eval_doc.questions, start=1):
-            # Set reference for hybrid keyword + embedding relevance judgment
-            judge.set_reference(" ".join(question.answer_keywords), question.answer_keywords)
-
-            # Smart retrieval
-            smart_hits = store.search(
-                f"{eval_doc.doc_id}_smart", question.question, top_k=5
+            judge.set_reference(
+                " ".join(question.answer_keywords), question.answer_keywords
             )
-            smart_metrics = compute_ir_metrics(smart_hits, judge, all_chunks=smart_chunks)
 
-            # Baseline retrieval
-            baseline_hits = store.search(
-                f"{eval_doc.doc_id}_baseline", question.question, top_k=5
-            )
-            baseline_metrics = compute_ir_metrics(baseline_hits, judge, all_chunks=baseline_chunks)
+            # Retrieve and score for each strategy
+            scores: dict[str, dict[str, float]] = {}
+            for strategy in STRATEGIES:
+                hits = store.search(
+                    f"{eval_doc.doc_id}_{strategy}", question.question, top_k=5
+                )
+                metrics = compute_ir_metrics(
+                    hits, judge, all_chunks=strategy_chunks[strategy]
+                )
+                doc_results[strategy].append(metrics)
+                scores[strategy] = metrics
 
-            doc_results["smart"].append(smart_metrics)
-            doc_results["baseline"].append(baseline_metrics)
-
-            # Winner marker
-            winner = "="
-            if smart_metrics["recall@5"] > baseline_metrics["recall@5"]:
-                winner = "S"
-            elif baseline_metrics["recall@5"] > smart_metrics["recall@5"]:
-                winner = "B"
+            # Winner by Recall@5
+            r5_smart = scores["smart"]["recall@5"]
+            r5_heading = scores["heading"]["recall@5"]
+            r5_fixed = scores["fixed"]["recall@5"]
+            best = max(r5_smart, r5_heading, r5_fixed)
+            winners = []
+            if r5_smart == best:
+                winners.append("S")
+            if r5_heading == best:
+                winners.append("H")
+            if r5_fixed == best:
+                winners.append("F")
 
             print(
-                f"  Q{qi}: R@5 S={smart_metrics['recall@5']:.2f} "
-                f"B={baseline_metrics['recall@5']:.2f}  [{winner}]"
+                f"  Q{qi:02d}: R@5 S={r5_smart:.2f} H={r5_heading:.2f} "
+                f"F={r5_fixed:.2f}  [{'+'.join(winners)}]"
             )
-            if smart_metrics["recall@5"] < baseline_metrics["recall@5"]:
-                print("     smart miss:", summarize_hit(smart_hits[0]) if smart_hits else "(no hit)")
-                print("     base top:  ", summarize_hit(baseline_hits[0]) if baseline_hits else "(no hit)")
 
         all_results[eval_doc.doc_id] = doc_results
 
@@ -159,7 +191,6 @@ def run_evaluation() -> dict[str, Any]:
 
 def summarize_hit(hit: dict[str, Any]) -> str:
     """Compact one retrieved hit for failure analysis output."""
-
     content = str(hit.get("content", "")).replace("\n", " ")
     content = " ".join(content.split())
     return f"{hit.get('chunk_id', '')} score={hit.get('score', 0):.4f} {content[:120]}"
@@ -172,53 +203,111 @@ METRICS = ["recall@1", "recall@3", "recall@5", "precision@5", "ndcg@5", "mrr"]
 
 def print_summary(results: dict[str, Any]) -> None:
     print(f"\n{'='*70}")
-    print("SUMMARY: Smart vs Baseline (Fixed-512)")
-    print("Retrieval: embedding (MiniLM)  |  Relevance: keyword + embedding over all chunks")
+    print("SUMMARY: Three-Strategy Comparison")
+    print("Retrieval: embedding (MiniLM)  |  Relevance: keyword + embedding")
     print(f"{'='*70}")
 
-    all_smart: dict[str, list[float]] = {m: [] for m in METRICS}
-    all_baseline: dict[str, list[float]] = {m: [] for m in METRICS}
+    all_strategy: dict[str, dict[str, list[float]]] = {
+        strategy: {m: [] for m in METRICS} for strategy in STRATEGIES
+    }
 
     for doc_id, doc_results in results.items():
         print(f"\n  [{doc_id}]")
-        print(f"  {'Metric':<14} {'Smart':>8} {'Baseline':>8} {'Delta':>9}")
-        print(f"  {'-'*40}")
+        header = f"  {'Metric':<14}"
+        for strategy in STRATEGIES:
+            header += f" {strategy:>8}"
+        header += f" {'S-H':>8} {'S-F':>8}"
+        print(header)
+        print(f"  {'-'*56}")
 
         for metric in METRICS:
-            sv = [q[metric] for q in doc_results["smart"]]
-            bv = [q[metric] for q in doc_results["baseline"]]
-            sa = sum(sv) / len(sv) if sv else 0
-            ba = sum(bv) / len(bv) if bv else 0
-            delta = sa - ba
-            sign = "+" if delta >= 0 else ""
-            print(f"  {metric:<14} {sa:>8.4f} {ba:>8.4f} {sign}{delta:>8.4f}")
-            all_smart[metric].extend(sv)
-            all_baseline[metric].extend(bv)
+            row = f"  {metric:<14}"
+            vals: dict[str, float] = {}
+            for strategy in STRATEGIES:
+                sv = [q[metric] for q in doc_results[strategy]]
+                avg = sum(sv) / len(sv) if sv else 0
+                vals[strategy] = avg
+                all_strategy[strategy][metric].extend(sv)
+                row += f" {avg:>8.4f}"
+            s_h = vals["smart"] - vals["heading"]
+            s_f = vals["smart"] - vals["fixed"]
+            row += f" {s_h:>+8.4f} {s_f:>+8.4f}"
+            print(row)
 
     # Overall
     print(f"\n  [OVERALL]")
-    print(f"  {'Metric':<14} {'Smart':>8} {'Baseline':>8} {'Delta':>8} {'Change':>10}")
-    print(f"  {'-'*50}")
+    header = f"  {'Metric':<14}"
+    for strategy in STRATEGIES:
+        header += f" {strategy:>8}"
+    header += f" {'S vs H':>9} {'S vs F':>9}"
+    print(header)
+    print(f"  {'-'*58}")
 
     for metric in METRICS:
-        sa = sum(all_smart[metric]) / len(all_smart[metric]) if all_smart[metric] else 0
-        ba = sum(all_baseline[metric]) / len(all_baseline[metric]) if all_baseline[metric] else 0
-        delta = sa - ba
-        pct = (delta / ba * 100) if ba > 0 else float("inf")
-        sign = "+" if delta >= 0 else ""
-        print(f"  {metric:<14} {sa:>8.4f} {ba:>8.4f} {sign}{delta:>7.4f} {sign}{pct:>8.1f}%")
+        row = f"  {metric:<14}"
+        vals: dict[str, float] = {}
+        for strategy in STRATEGIES:
+            sv = all_strategy[strategy][metric]
+            avg = sum(sv) / len(sv) if sv else 0
+            vals[strategy] = avg
+            row += f" {avg:>8.4f}"
 
-    # Verdict
-    r5_s = sum(all_smart["recall@5"]) / len(all_smart["recall@5"]) if all_smart["recall@5"] else 0
-    r5_b = sum(all_baseline["recall@5"]) / len(all_baseline["recall@5"]) if all_baseline["recall@5"] else 0
-    improvement = (r5_s - r5_b) / r5_b * 100 if r5_b > 0 else 0
+        # Smart vs Heading: how much does semantic boundary add?
+        s_vs_h = (
+            (vals["smart"] - vals["heading"]) / vals["heading"] * 100
+            if vals["heading"] > 0
+            else 0
+        )
+        # Smart vs Fixed: how much does structure+semantic add?
+        s_vs_f = (
+            (vals["smart"] - vals["fixed"]) / vals["fixed"] * 100
+            if vals["fixed"] > 0
+            else 0
+        )
+        row += f" {s_vs_h:>+8.1f}% {s_vs_f:>+8.1f}%"
+        print(row)
 
+    # Verdicts
     print(f"\n{'='*70}")
-    if improvement >= 10:
-        print(f"VERDICT: PASS  --  Recall@5 improvement +{improvement:.1f}%  >=  10% target")
+    print("VERDICTS:")
+    for strategy in STRATEGIES:
+        r5 = (
+            sum(all_strategy[strategy]["recall@5"])
+            / len(all_strategy[strategy]["recall@5"])
+            if all_strategy[strategy]["recall@5"]
+            else 0
+        )
+        print(f"  {STRATEGY_LABELS[strategy]}: Recall@5 = {r5:.4f}")
+
+    r5_s = (
+        sum(all_strategy["smart"]["recall@5"]) / len(all_strategy["smart"]["recall@5"])
+        if all_strategy["smart"]["recall@5"]
+        else 0
+    )
+    r5_f = (
+        sum(all_strategy["fixed"]["recall@5"]) / len(all_strategy["fixed"]["recall@5"])
+        if all_strategy["fixed"]["recall@5"]
+        else 0
+    )
+    r5_h = (
+        sum(all_strategy["heading"]["recall@5"]) / len(all_strategy["heading"]["recall@5"])
+        if all_strategy["heading"]["recall@5"]
+        else 0
+    )
+
+    improvement_vs_fixed = (r5_s - r5_f) / r5_f * 100 if r5_f > 0 else 0
+    semantic_gain = (r5_s - r5_h) / r5_h * 100 if r5_h > 0 else 0
+    structure_gain = (r5_h - r5_f) / r5_f * 100 if r5_f > 0 else 0
+
+    print(f"\n  Semantic boundary gain (Smart vs Heading): {semantic_gain:+.1f}%")
+    print(f"  Structure gain          (Heading vs Fixed): {structure_gain:+.1f}%")
+    print(f"  Total improvement       (Smart vs Fixed):   {improvement_vs_fixed:+.1f}%")
+
+    target = 10.0
+    if improvement_vs_fixed >= target:
+        print(f"\n  VERDICT: PASS — Recall@5 improvement +{improvement_vs_fixed:.1f}% >= +{target:.0f}% target")
     else:
-        print(f"VERDICT: BELOW TARGET  --  Recall@5 improvement {improvement:+.1f}%  <  10% target")
-        print(f"  Next: tune semantic_threshold, target_chars, overlap_sentences")
+        print(f"\n  VERDICT: BELOW TARGET — Recall@5 improvement {improvement_vs_fixed:+.1f}% < +{target:.0f}% target")
     print(f"{'='*70}")
 
 

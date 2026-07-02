@@ -1,11 +1,17 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { marked } from 'marked'
 import ConfigPanel from '../components/ConfigPanel.vue'
 import MetricPanel from '../components/MetricPanel.vue'
 import ChunkList from '../components/ChunkList.vue'
 import { queryRetrievedChunks } from '../api/chunking'
 import { apiFetch } from '../api/client'
 import { useChunkStore } from '../stores/chunkStore'
+
+function renderMarkdown(text) {
+  if (!text) return ''
+  return marked.parse(text)
+}
 
 const { state, submitUpload } = useChunkStore()
 const activeTab = ref('result')
@@ -304,7 +310,7 @@ function handleSubmit(payload) {
           <h3>回答摘要</h3>
           <span class="ui-pill ui-pill--accent">模型生成</span>
         </div>
-        <p>{{ qaAnswer }}</p>
+        <div class="qa-answer-body" v-html="renderMarkdown(qaAnswer)"></div>
       </div>
 
       <div v-if="qaRetrievedChunks.length" class="qa-result-list">
@@ -582,11 +588,62 @@ function handleSubmit(payload) {
   font-size: 16px;
 }
 
-.qa-answer-box p {
-  margin: 0;
+.qa-answer-body {
   font-size: 15px;
   line-height: 1.75;
   color: var(--text-primary);
+}
+
+.qa-answer-body :deep(h1),
+.qa-answer-body :deep(h2),
+.qa-answer-body :deep(h3),
+.qa-answer-body :deep(h4) {
+  margin: 16px 0 8px;
+  font-weight: 700;
+}
+
+.qa-answer-body :deep(p) {
+  margin: 0 0 10px;
+}
+
+.qa-answer-body :deep(ul),
+.qa-answer-body :deep(ol) {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.qa-answer-body :deep(li) {
+  margin-bottom: 4px;
+}
+
+.qa-answer-body :deep(strong) {
+  font-weight: 700;
+}
+
+.qa-answer-body :deep(code) {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+}
+
+.qa-answer-body :deep(pre) {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+}
+
+.qa-answer-body :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+
+.qa-answer-body :deep(blockquote) {
+  border-left: 3px solid var(--border-strong);
+  margin: 10px 0;
+  padding-left: 14px;
+  color: var(--text-secondary);
 }
 
 .qa-result-list {

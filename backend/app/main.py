@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.routes import router
 from backend.app.core.config import CORS_ALLOW_ORIGINS
-from backend.app.services.model_settings import initialize_model_settings
+from backend.app.core.model_settings import initialize_model_settings
 from backend.app.services.rag_store.service import initialize_rag_store
 
 logger = logging.getLogger(__name__)

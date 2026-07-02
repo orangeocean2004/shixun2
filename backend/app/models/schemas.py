@@ -65,3 +65,68 @@ class ModelSettingsResponse(BaseModel):
     OPENAI_BASE_URL: str = Field(min_length=1)
     LLM_MODEL: str = Field(min_length=1)
     QA_QUALITY_EVALUATOR: str = "lexical_overlap_v1"
+
+
+# ── /strategies ──────────────────────────────────────────
+
+class StrategyInfo(BaseModel):
+    name: str
+    label: str
+    description: str
+
+
+class StrategiesResponse(BaseModel):
+    segmentation_strategies: list[StrategyInfo]
+    keyword_strategies: list[str]
+    default_config: dict[str, Any]
+
+
+# ── /organize ────────────────────────────────────────────
+
+class OrganizeChunkInput(BaseModel):
+    chunk_id: str = ""
+    content: str
+
+
+class OrganizeRequest(BaseModel):
+    doc_id: str = ""
+    chunks: list[OrganizeChunkInput]
+    keyword_strategy: str = "jieba_tfidf"
+
+
+class OrganizeChunkOutput(BaseModel):
+    chunk_id: str
+    tags: list[str] = Field(default_factory=list)
+    summary: str = ""
+    entity_labels: list[dict[str, str]] = Field(default_factory=list)
+
+
+class OrganizeResponse(BaseModel):
+    doc_id: str
+    doc_summary: str = ""
+    chunks: list[OrganizeChunkOutput]
+
+
+# ── /evaluate ────────────────────────────────────────────
+
+class EvaluateRequest(BaseModel):
+    doc_id: str = Field(min_length=1)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+class StrategyMetrics(BaseModel):
+    strategy: str
+    chunk_count: int
+    avg_chunk_size: float
+    recall_at_1: float = 0.0
+    recall_at_3: float = 0.0
+    recall_at_5: float = 0.0
+    precision_at_5: float = 0.0
+    ndcg_at_5: float = 0.0
+    mrr: float = 0.0
+
+
+class EvaluateResponse(BaseModel):
+    doc_id: str
+    top_k: int
+    strategies: list[StrategyMetrics]

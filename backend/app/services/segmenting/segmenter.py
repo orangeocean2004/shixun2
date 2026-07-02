@@ -18,6 +18,7 @@ def segment_text(
     """纯文本分段入口。
 
     前端直接上传文本时可调用这个函数；如果已有结构化 block，则调用 segment_blocks。
+    config 为 None 时根据文本长度自动确定最优参数。
     """
 
     blocks = parse_plain_text(text)
@@ -36,9 +37,14 @@ def segment_blocks(
     2. 超长 chunk 继续按句子拆
     3. 过短 chunk 尝试合并
     4. 补全 ID、来源回链、质量标记和统计信息
+
+    config 为 None 时根据文档总长度自动确定最优参数。
     """
 
-    config = config or SegmentConfig()
+    if config is None:
+        total_chars = sum(len(b.text) for b in blocks)
+        config = SegmentConfig.auto(total_chars)
+
     candidate_chunks = build_candidate_chunks(blocks, config)
     normalized_chunks = split_oversized_chunks(candidate_chunks, config)
     merged_chunks = merge_short_chunks(normalized_chunks, config)

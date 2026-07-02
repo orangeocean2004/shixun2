@@ -5,7 +5,7 @@ from collections import Counter
 from functools import lru_cache
 from typing import Any
 
-from backend.app.services.embedding import embedding_similarity as embedding_model_similarity
+from backend.app.services.retrieval.embedding import embedding_similarity as embedding_model_similarity
 
 from .heading import heading_level, normalize_heading
 from .models import CandidateChunk, DocumentBlock, SegmentConfig
