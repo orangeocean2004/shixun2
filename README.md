@@ -185,9 +185,13 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 
 ```bash
 cd frontend
-npm install --registry=https://registry.npmjs.org/
+npm install
 npm run dev
 ```
+
+默认情况下，`npm install` 会使用本机配置的 npm registry。本项目的 `package-lock.json`
+已使用公开 npm registry 生成；如果本机配置的镜像源或企业内网源解析失败，可临时使用
+`npm install --registry=https://registry.npmjs.org/` 安装。
 
 前端运行在 `http://127.0.0.1:5173`，通过 Vite proxy 转发 API 请求到后端。
 
