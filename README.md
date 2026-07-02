@@ -125,13 +125,14 @@
 
 > 当前参数搜索后默认配置为 `min_chars=180, target_chars=550, max_chars=800, heading_flush_min_chars=240, semantic_boundary_threshold=0.55, overlap_sentences=1`。`eval_rag.py` 实测 Recall@5 相对固定长度基线提升 +18.5%，达到任务书中 ≥10% 的目标。
 
-**测试**：21 个单元测试全部通过。
+**测试**：后端 27 个单元测试全部通过。
 
-### 待完成
+### 当前状态与待完成
 
 | 项目 | 说明 |
 |------|------|
-| 检索提升达标 | 当前 Recall@5 +18.5%（目标 +10%），已通过 `eval_rag.py` 验证 |
+| 检索提升达标 | 已完成：当前 Recall@5 +18.5%（目标 +10%），已通过 `eval_rag.py` 验证 |
+| 前端依赖源 | 已修正：`package-lock.json` 使用公开 npm registry，避免依赖内网源 |
 | 语义完整性人工评估 | `scripts/human_eval_semantic.py` 已就绪，待执行 |
 | 标签准确率/摘要忠实度评测 | `evaluator.py` 已就绪，待实际运行评测 |
 | QA 合成评测 | `synthesize_qa_pairs.py` 已就绪（需 API Key） |
@@ -187,6 +188,10 @@ cd frontend
 npm install
 npm run dev
 ```
+
+默认情况下，`npm install` 会使用本机配置的 npm registry。本项目的 `package-lock.json`
+已使用公开 npm registry 生成；如果本机配置的镜像源或企业内网源解析失败，可临时使用
+`npm install --registry=https://registry.npmjs.org/` 安装。
 
 前端运行在 `http://127.0.0.1:5173`，通过 Vite proxy 转发 API 请求到后端。
 
