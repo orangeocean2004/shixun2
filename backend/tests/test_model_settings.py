@@ -20,8 +20,8 @@ class ModelSettingsTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             settings_path = Path(temp_dir) / "model_settings.json"
-            with patch("backend.app.services.model_settings.MODEL_SETTINGS_PATH", settings_path), patch.dict(
-                "backend.app.services.model_settings.MODEL_SETTINGS_DEFAULTS",
+            with patch("backend.app.core.model_settings.MODEL_SETTINGS_PATH", settings_path), patch.dict(
+                "backend.app.core.model_settings.MODEL_SETTINGS_DEFAULTS",
                 defaults,
                 clear=True,
             ):

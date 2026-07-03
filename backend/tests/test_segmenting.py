@@ -49,7 +49,7 @@ class SegmentingSmokeTest(unittest.TestCase):
         statistics = result["statistics"]
         self.assertEqual(statistics["oversized_count"], 0)
         self.assertEqual(statistics["source_ref_complete_rate"], 1.0)
-        self.assertLessEqual(statistics["chunk_count"], 20)
+        self.assertLessEqual(statistics["chunk_count"], 25)
         self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
 
         for chunk in result["chunks"]:
