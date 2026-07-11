@@ -64,7 +64,6 @@ def ingest_document(
     target_chars: int,
     max_chars: int,
     overlap_sentences: int,
-    keyword_strategy: str,
 ) -> dict[str, Any]:
     if not doc_id.strip():
         raise RAGValidationError("doc_id 不能为空")
@@ -107,19 +106,31 @@ def ingest_document(
         stored_doc = True
 
         cleaned_blocks, preprocess_report = preprocess_document_blocks(blocks)
-        config = SegmentConfig(
-            min_chars=min_chars,
-            target_chars=target_chars,
-            max_chars=max_chars,
-            overlap_sentences=overlap_sentences,
-            keyword_strategy=keyword_strategy,
+
+        # 自适应：仅当用户使用默认参数时，根据文档总长度自动调整
+        from backend.app.core.config import (
+            DEFAULT_MIN_CHARS,
+            DEFAULT_TARGET_CHARS,
+            DEFAULT_MAX_CHARS,
+            DEFAULT_OVERLAP_SENTENCES,
         )
-        # 自适应：如果使用默认参数，根据文档总长度自动调整
-        total_chars = sum(len(b.text) for b in cleaned_blocks)
-        config = SegmentConfig.auto(total_chars)
-        # 保留用户显式设置的关键词策略
-        config.keyword_strategy = keyword_strategy
-        config.overlap_sentences = overlap_sentences
+        is_default_params = (
+            min_chars == DEFAULT_MIN_CHARS
+            and target_chars == DEFAULT_TARGET_CHARS
+            and max_chars == DEFAULT_MAX_CHARS
+            and overlap_sentences == DEFAULT_OVERLAP_SENTENCES
+        )
+        if is_default_params:
+            total_chars = sum(len(b.text) for b in cleaned_blocks)
+            config = SegmentConfig.auto(total_chars)
+            config.overlap_sentences = overlap_sentences
+        else:
+            config = SegmentConfig(
+                min_chars=min_chars,
+                target_chars=target_chars,
+                max_chars=max_chars,
+                overlap_sentences=overlap_sentences,
+            )
         result = segment_blocks(cleaned_blocks, doc_id=doc_id, config=config)
 
         # ChromaDB 入库（失败不影响分段结果返回）
@@ -160,10 +171,39 @@ def ingest_document(
             os.remove(temp_path)
 
 
-TOKEN_PATTERN = re.compile(r"[一-鿿A-Za-z0-9_]+")
+TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 
 
-def retrieve_chunks(question: str, top_k: int) -> dict[str, Any]:
+def tokenize(text: str) -> set[str]:
+    """Tokenize text into a set of normalised tokens.
+
+    Uses jieba for Chinese word segmentation (if available), with a
+    regex fallback for English/alphanumeric tokens.
+    """
+    tokens: set[str] = set()
+    if not text or not text.strip():
+        return tokens
+
+    # ── Chinese segmentation via jieba ──
+    try:
+        import jieba
+        for word in jieba.cut(text):
+            word = word.strip().lower()
+            if len(word) >= 2:
+                tokens.add(word)
+    except ImportError:
+        pass
+
+    # ── English / alphanumeric tokens ──
+    for match in TOKEN_PATTERN.finditer(text):
+        token = match.group(0).strip().lower()
+        if len(token) >= 2:
+            tokens.add(token)
+
+    return tokens
+
+
+def retrieve_chunks(question: str, top_k: int, doc_id: str | None = None) -> dict[str, Any]:
     normalized_question = (question or "").strip()
     if not normalized_question:
         raise RAGValidationError("question 不能为空")
@@ -171,7 +211,7 @@ def retrieve_chunks(question: str, top_k: int) -> dict[str, Any]:
         raise RAGValidationError("top_k 必须大于 0")
 
     candidate_k = max(top_k * DEFAULT_RETRIEVE_CANDIDATE_MULTIPLIER, DEFAULT_RETRIEVE_MIN_CANDIDATES)
-    hits = query_chunks(question=normalized_question, top_k=candidate_k)
+    hits = query_chunks(question=normalized_question, top_k=candidate_k, doc_id=doc_id)
     chunk_ids = [hit["chunk_id"] for hit in hits]
     chunk_map = get_chunks_by_ids(chunk_ids)
 
@@ -236,10 +276,6 @@ def chunk_quality_penalty(chunk: dict[str, Any]) -> float:
     if "oversized" in flags:
         penalty += RETRIEVE_QUALITY_PENALTY
     return penalty
-
-
-def tokenize(text: str) -> set[str]:
-    return {token.lower() for token in TOKEN_PATTERN.findall(text or "") if token.strip()}
 
 
 def list_all_chunks(doc_id: str) -> dict[str, Any]:

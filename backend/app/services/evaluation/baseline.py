@@ -105,7 +105,24 @@ def heading_based_segment(
     blocks = parse_plain_text(text)
     result = segment_blocks(blocks, doc_id=doc_id, config=config)
 
-    return result["chunks"]  # segment_blocks returns list[dict], compatible with eval_rag
+    # segment_blocks returns list[dict]; convert back to Chunk for type consistency
+    raw = result["chunks"]
+    return [_dict_to_chunk(c) for c in raw]
+
+
+def _dict_to_chunk(d: dict) -> Chunk:
+    """Reconstruct a Chunk from a dict (inverse of chunk_to_dict)."""
+    return Chunk(
+        chunk_id=d.get("chunk_id", ""),
+        content=d.get("content", ""),
+        title_path=d.get("title_path", []),
+        chunk_type=d.get("chunk_type", "normal"),
+        char_count=d.get("char_count", 0),
+        source_refs=d.get("source_refs", []),
+        strategy_info=d.get("strategy_info", {}),
+        retrieval_text=d.get("retrieval_text", ""),
+        quality_flags=d.get("quality_flags", []),
+    )
 
 
 def _find_sentence_boundaries(text: str, chunk_size: int) -> list[int]:

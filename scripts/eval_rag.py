@@ -167,9 +167,9 @@ def run_evaluation() -> dict[str, Any]:
                 scores[strategy] = metrics
 
             # Winner by Recall@5
-            r5_smart = scores["smart"]["recall@5"]
-            r5_heading = scores["heading"]["recall@5"]
-            r5_fixed = scores["fixed"]["recall@5"]
+            r5_smart = scores["smart"]["recall_at_5"]
+            r5_heading = scores["heading"]["recall_at_5"]
+            r5_fixed = scores["fixed"]["recall_at_5"]
             best = max(r5_smart, r5_heading, r5_fixed)
             winners = []
             if r5_smart == best:
@@ -198,7 +198,7 @@ def summarize_hit(hit: dict[str, Any]) -> str:
 
 # ── Report ───────────────────────────────────────────────
 
-METRICS = ["recall@1", "recall@3", "recall@5", "precision@5", "ndcg@5", "mrr"]
+METRICS = ["recall_at_1", "recall_at_3", "recall_at_5", "precision_at_5", "ndcg_at_5", "mrr"]
 
 
 def print_summary(results: dict[str, Any]) -> None:
@@ -272,26 +272,26 @@ def print_summary(results: dict[str, Any]) -> None:
     print("VERDICTS:")
     for strategy in STRATEGIES:
         r5 = (
-            sum(all_strategy[strategy]["recall@5"])
-            / len(all_strategy[strategy]["recall@5"])
-            if all_strategy[strategy]["recall@5"]
+            sum(all_strategy[strategy]["recall_at_5"])
+            / len(all_strategy[strategy]["recall_at_5"])
+            if all_strategy[strategy]["recall_at_5"]
             else 0
         )
         print(f"  {STRATEGY_LABELS[strategy]}: Recall@5 = {r5:.4f}")
 
     r5_s = (
-        sum(all_strategy["smart"]["recall@5"]) / len(all_strategy["smart"]["recall@5"])
-        if all_strategy["smart"]["recall@5"]
+        sum(all_strategy["smart"]["recall_at_5"]) / len(all_strategy["smart"]["recall_at_5"])
+        if all_strategy["smart"]["recall_at_5"]
         else 0
     )
     r5_f = (
-        sum(all_strategy["fixed"]["recall@5"]) / len(all_strategy["fixed"]["recall@5"])
-        if all_strategy["fixed"]["recall@5"]
+        sum(all_strategy["fixed"]["recall_at_5"]) / len(all_strategy["fixed"]["recall_at_5"])
+        if all_strategy["fixed"]["recall_at_5"]
         else 0
     )
     r5_h = (
-        sum(all_strategy["heading"]["recall@5"]) / len(all_strategy["heading"]["recall@5"])
-        if all_strategy["heading"]["recall@5"]
+        sum(all_strategy["heading"]["recall_at_5"]) / len(all_strategy["heading"]["recall_at_5"])
+        if all_strategy["heading"]["recall_at_5"]
         else 0
     )
 

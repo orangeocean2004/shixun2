@@ -1,34 +1,51 @@
 from __future__ import annotations
 
+import logging
+import threading
 from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import CHROMA_COLLECTION_NAME, CHROMA_PERSIST_DIR
 
+logger = logging.getLogger(__name__)
+
 _client = None
 _collection = None
+_chroma_ready = False
+_chroma_init_lock = threading.Lock()
 
 
 def initialize_chroma() -> None:
-    global _client, _collection
-    try:
-        from chromadb import PersistentClient
-    except ImportError as exc:
-        raise RuntimeError("chromadb 未安装，请先安装依赖后再启动服务") from exc
+    """在后台线程初始化 ChromaDB，不阻塞启动。
+
+    ChromaDB 首次初始化会下载模型（可能很慢或超时），
+    如果初始化失败，所有向量操作静默跳过，不影响分段功能。
+    """
+    global _client, _collection, _chroma_ready
 
     Path(CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)
-    if _client is None:
-        _client = PersistentClient(path=str(CHROMA_PERSIST_DIR))
 
-    # 优先使用 Chroma 默认模型缓存，缺失时回退到本地 MiniLM-L12
-    embedding_fn = _get_chromadb_embedding_function()
-    if embedding_fn is None:
-        embedding_fn = _get_embedding_function()
+    def _do_init() -> None:
+        global _client, _collection, _chroma_ready
+        try:
+            with _chroma_init_lock:
+                if _chroma_ready:
+                    return
+                from chromadb import PersistentClient
+                _client = PersistentClient(path=str(CHROMA_PERSIST_DIR))
+                embedding_fn = _get_chromadb_embedding_function()
+                if embedding_fn is None:
+                    embedding_fn = _get_embedding_function()
+                _collection = _client.get_or_create_collection(
+                    name=CHROMA_COLLECTION_NAME,
+                    embedding_function=embedding_fn,
+                )
+                _chroma_ready = True
+                logger.info("ChromaDB initialized successfully")
+        except Exception:
+            logger.warning("ChromaDB init failed, vector store unavailable")
 
-    _collection = _client.get_or_create_collection(
-        name=CHROMA_COLLECTION_NAME,
-        embedding_function=embedding_fn,
-    )
+    threading.Thread(target=_do_init, daemon=True, name="chroma-init").start()
 
 
 _embedding_fn = None
@@ -70,13 +87,25 @@ def _get_embedding_function():
 
 def _get_collection():
     if _collection is None:
-        initialize_chroma()
+        return None
+    return _collection
+
+
+def _ensure_collection():
+    """获取已初始化的 collection，未就绪返回 None。"""
+    if not _chroma_ready:
+        return None
     return _collection
 
 
 def delete_document_vectors(doc_id: str) -> None:
-    collection = _get_collection()
-    collection.delete(where={"doc_id": doc_id})
+    collection = _ensure_collection()
+    if collection is None:
+        return
+    try:
+        collection.delete(where={"doc_id": doc_id})
+    except Exception:
+        pass
 
 
 def _build_retrieval_document(chunk: dict[str, Any]) -> str:
@@ -111,7 +140,9 @@ def upsert_chunks(doc_id: str, chunks: list[dict[str, Any]]) -> None:
     if not chunks:
         return
 
-    collection = _get_collection()
+    collection = _ensure_collection()
+    if collection is None:
+        return
     ids: list[str] = []
     documents: list[str] = []
     metadatas: list[dict[str, Any]] = []
@@ -141,13 +172,17 @@ def upsert_chunks(doc_id: str, chunks: list[dict[str, Any]]) -> None:
     collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
 
 
-def query_chunks(question: str, top_k: int) -> list[dict[str, Any]]:
-    collection = _get_collection()
+def query_chunks(question: str, top_k: int, doc_id: str | None = None) -> list[dict[str, Any]]:
+    collection = _ensure_collection()
+    if collection is None:
+        return []
     query_kwargs: dict[str, Any] = {
         "query_texts": [question],
         "n_results": top_k,
         "include": ["distances", "metadatas", "documents"],
     }
+    if doc_id:
+        query_kwargs["where"] = {"doc_id": doc_id}
     result = collection.query(**query_kwargs)
 
     ids = (result.get("ids") or [[]])[0]

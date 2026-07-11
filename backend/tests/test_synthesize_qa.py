@@ -76,5 +76,50 @@ class SynthesizeQATest(unittest.TestCase):
         self.assertEqual(len(fake_evaluator.calls), 1)
 
 
+    @patch("backend.app.services.rag_store.sqlite_store.get_qa_pairs_by_doc", return_value=[])
+    @patch("backend.app.services.rag_store.sqlite_store.upsert_qa_pairs", return_value=1)
+    @patch("backend.app.services.organizer.model_client.LLMClient", return_value=_FakeLLM())
+    @patch("backend.app.api.routes.get_model_settings")
+    @patch("backend.app.api.routes.get_qa_quality_evaluator")
+    def test_synthesize_qa_saves_llm_pairs_when_doc_id_is_provided(
+        self,
+        mock_get_evaluator: unittest.mock.Mock,
+        mock_get_settings: unittest.mock.Mock,
+        mock_llm_client: unittest.mock.Mock,
+        mock_upsert: unittest.mock.Mock,
+        mock_get_qa_pairs: unittest.mock.Mock,
+    ) -> None:
+        mock_get_evaluator.return_value = _FakeEvaluator()
+        mock_get_settings.return_value = {
+            "OPENAI_API_KEY": "sk-test",
+            "OPENAI_BASE_URL": "https://api.deepseek.com",
+            "LLM_MODEL": "deepseek-chat",
+            "QA_QUALITY_EVALUATOR": "lexical_overlap_v1",
+        }
+
+        response = synthesize_qa(
+            {
+                "doc_id": "doc_1",
+                "save_mode": "append",
+                "chunks": [
+                    {
+                        "chunk_id": "chunk_1",
+                        "title_path": ["chapter"],
+                        "content": "Some content",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(response["saved"], 1)
+        self.assertEqual(response["save_mode"], "append")
+        saved_doc_id, saved_pairs = mock_upsert.call_args.args
+        self.assertEqual(saved_doc_id, "doc_1")
+        self.assertEqual(saved_pairs[0]["source"], "llm")
+        self.assertEqual(saved_pairs[0]["chunk_id"], "chunk_1")
+        self.assertEqual(mock_upsert.call_args.kwargs["replace"], False)
+
+
+
 if __name__ == "__main__":
     unittest.main()

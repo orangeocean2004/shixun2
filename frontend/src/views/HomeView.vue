@@ -27,6 +27,10 @@ const qaAnswer = ref('')
 const qaSynthesizing = ref(false)
 const qaPairs = ref([])
 const qaSynthError = ref('')
+const qaSaveMode = ref('replace')
+const qaSavedCount = ref(null)
+const qaMatched = ref(null)
+const qaAnswerCovered = ref(null)
 const hasResult = computed(() => Boolean(state.result))
 const rawResultJson = computed(() => (state.result ? JSON.stringify(state.result, null, 2) : ''))
 const rawResultHighlighted = computed(() => highlightJson(rawResultJson.value))
@@ -94,7 +98,7 @@ function getCatalogLabel(chunk) {
 }
 
 function switchTab(tab) {
-  if (tab === 'json' && !hasResult.value) {
+  if ((tab === 'json' || tab === 'eval' || tab === 'qasync' || tab === 'qa') && !hasResult.value) {
     return
   }
   activeTab.value = tab
@@ -130,6 +134,8 @@ function openAllChunksView(chunk) {
 async function runQuery() {
   qaError.value = ''
   qaRetrievedChunks.value = []
+  qaMatched.value = null
+  qaAnswerCovered.value = null
 
   const question = qaQuestion.value.trim()
   if (!question) {
@@ -141,10 +147,13 @@ async function runQuery() {
   try {
     const response = await queryRetrievedChunks({
       question,
+      docId: qaDocId.value || state.result?.doc_id || '',
     })
     qaDocId.value = response.doc_id || qaDocId.value
     qaRetrievedChunks.value = response.chunks || []
     qaAnswer.value = response.answer || ''
+    qaMatched.value = response.matched_qa || null
+    qaAnswerCovered.value = response.answer_covered
   } catch (error) {
     qaError.value = error?.message || '检索失败，请稍后重试。'
   } finally {
@@ -157,13 +166,19 @@ async function synthesizeQA() {
   qaSynthesizing.value = true
   qaSynthError.value = ''
   qaPairs.value = []
+  qaSavedCount.value = null
   try {
     const data = await apiFetch('/api/synthesize-qa', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chunks: state.result.chunks }),
+      body: JSON.stringify({
+        chunks: state.result.chunks,
+        doc_id: state.result?.doc_id || '',
+        save_mode: qaSaveMode.value,
+      }),
     })
     qaPairs.value = data.qa_pairs || []
+    qaSavedCount.value = typeof data.saved === 'number' ? data.saved : null
   } catch (e) {
     qaSynthError.value = e?.message || 'QA 合成失败'
   } finally {
@@ -188,8 +203,10 @@ function handleSubmit(payload) {
   qaDocId.value = payload.docId || ''
   qaRetrievedChunks.value = []
   qaError.value = ''
+  qaSavedCount.value = null
   submitUpload(payload)
 }
+
 </script>
 
 <template>
@@ -200,7 +217,7 @@ function handleSubmit(payload) {
           <h2 class="panel-title">工作台</h2>
           <p class="panel-subtitle">按顺序查看上传结果、问答检索、QA 合成与原始返回数据。</p>
         </div>
-        <span class="ui-pill">当前模式：{{ activeTab === 'result' ? '文档分块' : activeTab === 'qa' ? '问答检索' : activeTab === 'qasync' ? 'QA 合成' : '原始 JSON' }}</span>
+        <span class="ui-pill">当前模式：{{ activeTab === 'result' ? '文档分块' : activeTab === 'qasync' ? 'QA 合成' : activeTab === 'qa' ? '问答检索' : '原始 JSON' }}</span>
       </div>
       <div class="tabs">
         <button
@@ -214,19 +231,20 @@ function handleSubmit(payload) {
         <button
           type="button"
           class="tab-btn"
-          :class="{ active: activeTab === 'qa' }"
-          @click="switchTab('qa')"
-        >
-          问答检索
-        </button>
-        <button
-          type="button"
-          class="tab-btn"
           :class="{ active: activeTab === 'qasync' }"
           :disabled="!hasResult"
           @click="switchTab('qasync')"
         >
           QA 合成
+        </button>
+        <button
+          type="button"
+          class="tab-btn"
+          :class="{ active: activeTab === 'qa' }"
+          :disabled="!hasResult"
+          @click="switchTab('qa')"
+        >
+          问答检索
         </button>
         <button
           type="button"
@@ -238,7 +256,7 @@ function handleSubmit(payload) {
           原始 JSON
         </button>
       </div>
-      <p v-if="!hasResult" class="tabs-hint">上传文档后可查看目录、统计信息和原始 JSON；问答检索可单独使用。</p>
+      <p v-if="!hasResult" class="tabs-hint">上传文档后可解锁 QA 合成、问答检索与原始 JSON。</p>
     </section>
 
     <section v-if="activeTab === 'result'" class="result-tab">
@@ -270,7 +288,7 @@ function handleSubmit(payload) {
         </aside>
 
         <div class="result-main">
-          <MetricPanel :statistics="state.result.statistics" :strategy="state.result.strategy" />
+          <MetricPanel :statistics="state.result.statistics" />
           <ChunkList ref="resultChunkListRef" :chunks="state.result.chunks" :doc-id="state.result?.doc_id || ''" />
         </div>
       </section>
@@ -308,8 +326,14 @@ function handleSubmit(payload) {
       <div v-if="qaAnswer" class="qa-answer-box">
         <div class="qa-answer-head">
           <h3>回答摘要</h3>
-          <span class="ui-pill ui-pill--accent">模型生成</span>
+          <div class="qa-answer-badges">
+            <span v-if="qaMatched" class="ui-pill ui-pill--success">QA 匹配 ({{ (qaMatched.similarity * 100).toFixed(0) }}%)</span>
+            <span v-else class="ui-pill ui-pill--accent">模型生成</span>
+            <span v-if="qaAnswerCovered === true" class="ui-pill ui-pill--success">答案已覆盖</span>
+            <span v-else-if="qaAnswerCovered === false" class="ui-pill ui-pill--warning">答案未覆盖</span>
+          </div>
         </div>
+        <p v-if="qaMatched" class="qa-match-source">来源 chunk：{{ qaMatched.chunk_id }}</p>
         <div class="qa-answer-body" v-html="renderMarkdown(qaAnswer)"></div>
       </div>
 
@@ -343,18 +367,39 @@ function handleSubmit(payload) {
           <h2 class="panel-title">QA 对合成</h2>
           <p class="panel-subtitle">基于当前文档分块自动生成问答对，用于快速抽检质量。</p>
         </div>
-        <button
-          type="button"
-          class="ui-button ui-button--primary"
-          :disabled="qaSynthesizing || !hasResult"
-          @click="synthesizeQA"
-        >
-          {{ qaSynthesizing ? '生成中...' : '生成 QA 对' }}
-        </button>
+        <div class="qa-synth-actions">
+          <div class="qa-save-toggle" role="group" aria-label="QA 保存方式">
+            <button
+              type="button"
+              class="qa-save-option"
+              :class="{ active: qaSaveMode === 'replace' }"
+              @click="qaSaveMode = 'replace'"
+            >
+              覆盖
+            </button>
+            <button
+              type="button"
+              class="qa-save-option"
+              :class="{ active: qaSaveMode === 'append' }"
+              @click="qaSaveMode = 'append'"
+            >
+              追加
+            </button>
+          </div>
+          <button
+            type="button"
+            class="ui-button ui-button--primary"
+            :disabled="qaSynthesizing || !hasResult"
+            @click="synthesizeQA"
+          >
+            {{ qaSynthesizing ? '生成中...' : '生成 QA 对' }}
+          </button>
+        </div>
       </div>
 
       <p v-if="!hasResult" class="empty">请先在“文档分块”中上传文档。</p>
       <p v-if="qaSynthError" class="ui-status ui-status--error">{{ qaSynthError }}</p>
+      <p v-if="qaSavedCount !== null" class="ui-status ui-status--success">已保存 {{ qaSavedCount }} 个 QA 对。</p>
 
       <div v-if="qaPairs.length" class="qa-pairs-list">
         <div class="qa-pairs-actions">
@@ -418,12 +463,43 @@ function handleSubmit(payload) {
 .qa-head,
 .qa-synth-head,
 .json-head,
+.eval-tab-head,
 .qa-list-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.qa-synth-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.qa-save-toggle {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.qa-save-option {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 9px 13px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.qa-save-option.active {
+  color: #ffffff;
+  background: rgba(var(--accent-rgb), 0.18);
 }
 
 .tabs {
@@ -580,6 +656,18 @@ function handleSubmit(payload) {
   gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 12px;
+}
+
+.qa-answer-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.qa-match-source {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .qa-answer-head h3,
@@ -794,3 +882,4 @@ function handleSubmit(payload) {
   }
 }
 </style>
+

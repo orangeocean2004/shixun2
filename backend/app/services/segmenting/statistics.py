@@ -9,15 +9,27 @@ from .models import Chunk, SegmentConfig
 TOKEN_PATTERN = re.compile(r"[一-鿿]|[A-Za-z0-9_]+|[^\s]")
 
 # 句子结束标点：句号、问号、叹号、省略号、分号、右引号/括号类
+# 中英文混合：。！？. ! ? : ：— … ~ 均为句子或语义段落结束符
 _SENTENCE_END_PATTERN = re.compile(
-    r"[。！？…~；;」』】》）\"'`\s]$"
+    r"[。！？…~—～；;」』】》）\)\]\}:：.!?\"'`\s]$"
+)
+
+# 英文缩写模式：单个大写字母+. 或常见缩写（如 Dr. Mr. etc. vs.）
+# 仅大写单字母算缩写（U.S. → U.），小写字母+句点不是（如 JS 变量 e.）
+_ABBREVIATION_PATTERN = re.compile(
+    r"(?:^|\s)(?:[A-Z]|(?i:Dr|Mr|Mrs|Ms|Prof|etc|vs|e\.g|i\.e|al|St|Rd|Ave|Blvd))\.$",
 )
 
 # 需要保证不被截断的特殊块类型（与 splitter 中的 PROTECTED_BLOCK_TYPES 保持一致）
 _PROTECTED_BLOCK_TYPES = frozenset({"table", "formula", "code"})
 
 
-def build_statistics(chunks: list[Chunk], config: SegmentConfig) -> dict[str, Any]:
+def build_statistics(
+    chunks: list[Chunk],
+    config: SegmentConfig,
+    *,
+    is_last_chunk_boundary: bool = True,
+) -> dict[str, Any]:
     """生成分段质量统计，供接口响应和前端展示使用。
 
     统计项说明：
@@ -41,7 +53,10 @@ def build_statistics(chunks: list[Chunk], config: SegmentConfig) -> dict[str, An
             "table_code_formula_intact_rate": 0,
         }
 
-    target_hits = [chunk for chunk in chunks if config.min_chars <= chunk.char_count <= config.max_chars]
+    # 目标长度命中率：排除结构性短块（heading/code/formula/table 天生长度不定）
+    _SKIP_HIT_RATE_TYPES = frozenset({"heading", "code", "formula", "table"})
+    body_chunks = [c for c in chunks if c.chunk_type not in _SKIP_HIT_RATE_TYPES]
+    target_hits = [c for c in body_chunks if config.min_chars <= c.char_count <= config.max_chars]
     complete_refs = [chunk for chunk in chunks if chunk.source_refs]
     token_counts = [count_tokens(chunk.content) for chunk in chunks]
     token_hits = [
@@ -50,7 +65,14 @@ def build_statistics(chunks: list[Chunk], config: SegmentConfig) -> dict[str, An
     ]
 
     # 不破句率：chunk 末尾是否在合法句子边界结束
-    no_break_chunks = [chunk for chunk in chunks if _ends_at_sentence_boundary(chunk.content)]
+    # 最后一个 chunk 的结尾是文档末尾，视为合法边界
+    no_break_chunks: list[Chunk] = []
+    for i, chunk in enumerate(chunks):
+        is_last = (i == len(chunks) - 1)
+        if is_last and is_last_chunk_boundary:
+            no_break_chunks.append(chunk)
+        elif _ends_at_sentence_boundary(chunk.content):
+            no_break_chunks.append(chunk)
 
     # 表格/公式/代码整体成块率
     protected_chunks = [chunk for chunk in chunks if chunk.chunk_type in _PROTECTED_BLOCK_TYPES]
@@ -60,7 +82,7 @@ def build_statistics(chunks: list[Chunk], config: SegmentConfig) -> dict[str, An
         "chunk_count": len(chunks),
         "avg_chars": round(sum(chunk.char_count for chunk in chunks) / len(chunks), 2),
         "avg_tokens": round(sum(token_counts) / len(token_counts), 2),
-        "target_length_hit_rate": round(len(target_hits) / len(chunks), 4),
+        "target_length_hit_rate": round(len(target_hits) / len(body_chunks), 4) if body_chunks else 1.0,
         "target_token_length_hit_rate": round(len(token_hits) / len(chunks), 4),
         "oversized_count": sum("oversized" in chunk.quality_flags for chunk in chunks),
         "undersized_count": sum("undersized" in chunk.quality_flags for chunk in chunks),
@@ -78,13 +100,36 @@ def _ends_at_sentence_boundary(content: str) -> bool:
 
     合法边界包括：句号、问号、叹号、省略号、分号、右引号/右括号、
     空白字符、以及内容结尾。
+    对于英文句点 . 会额外过滤常见缩写（如 U.S. Dr. etc.），避免误判。
+
+    如果整个 chunk 内部没有任何句末标点，说明内容本身就不是由句子组成的
+    （如纯标题、纯关键词、列表项等），不存在"破句"问题，直接判定为合法。
     """
     if not content:
         return True
     stripped = content.rstrip()
     if not stripped:
         return True
-    return bool(_SENTENCE_END_PATTERN.search(stripped))
+
+    # 如果内容内部根本没有任何句末标点 → 不是句子组成的内容，不算破句
+    if not _SENTENCE_END_PATTERN.search(stripped):
+        return True
+
+    # For English period: filter out abbreviations (e.g. "U.S.", "Dr.")
+    if stripped.endswith(".") and not stripped.endswith(".\"") and not stripped.endswith(".'"):
+        # Check if the last word looks like an abbreviation
+        last_word = stripped.rstrip(". ")
+        words = last_word.split()
+        if words:
+            last_token = words[-1]
+            # Single uppercase letter = likely abbreviation (e.g. "U.S.")
+            if len(last_token) == 1 and last_token.isupper():
+                return False
+            # Known abbreviation patterns
+            if _ABBREVIATION_PATTERN.search(stripped.rsplit("\n", 1)[-1]):
+                return False
+
+    return True
 
 
 def _is_protected_block_intact(chunk: Chunk) -> bool:
@@ -122,7 +167,8 @@ def chunk_to_dict(chunk: Chunk) -> dict[str, Any]:
         "entity_tags": chunk.entity_tags,
         "backlink": chunk.backlink,
         "section_titles": chunk.section_titles,
-        "retrieval_text": chunk.retrieval_text,
+        "parent_chunk_id": chunk.parent_chunk_id,
+        "child_chunk_ids": chunk.child_chunk_ids,
     }
 
 

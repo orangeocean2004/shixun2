@@ -185,3 +185,34 @@ def is_markdown_separator_row(line: str) -> bool:
         return False
     cells = [cell.strip() for cell in stripped.split("|")]
     return all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells)
+
+
+# ── SEC EDGAR / garbled text cleaner ──────────────────────────
+
+# UUencoded lines: start with M or backtick, followed by 50+ chars in range 0x21-0x60
+_UUENCODE_LINE = re.compile(r"^[M`][\x21-\x60]{50,}$")
+
+# UUencode tail remnants: short lines like "M.", "M.*", backtick-only
+_UUENCODE_TAIL = re.compile(r"^[M`]\.?\s*$")
+
+# Binary-looking lines: entirely non-alphanumeric, min 60 chars
+_BINARY_LINE = re.compile(r"^[^a-zA-Z0-9一-鿿\s]{60,}$")
+
+
+def clean_garbled_text(text: str) -> str:
+    """Remove encoding artifacts (SEC EDGAR UUencoding, binary garbage lines)."""
+    lines = text.split("\n")
+    cleaned: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            cleaned.append(line)
+            continue
+        if _UUENCODE_LINE.match(stripped):
+            continue
+        if _UUENCODE_TAIL.match(stripped):
+            continue
+        if _BINARY_LINE.match(stripped):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)

@@ -184,12 +184,12 @@ def compute_ir_metrics(
         rel_at_k = relevance[:effective_k]
 
         # Recall@k
-        metrics[f"recall@{k}"] = (
+        metrics[f"recall_at_{k}"] = (
             sum(rel_at_k) / total_relevant if total_relevant > 0 else 0.0
         )
 
         # Precision@k
-        metrics[f"precision@{k}"] = sum(rel_at_k) / effective_k if effective_k > 0 else 0.0
+        metrics[f"precision_at_{k}"] = sum(rel_at_k) / effective_k if effective_k > 0 else 0.0
 
         # nDCG@k: binary relevance gain, so irrelevant high-score hits do not look perfect.
         dcg = 0.0
@@ -201,7 +201,7 @@ def compute_ir_metrics(
         ideal_relevant = min(total_relevant, effective_k)
         for i in range(ideal_relevant):
             idcg += 1.0 / math.log2(i + 2)
-        metrics[f"ndcg@{k}"] = dcg / idcg if idcg > 0 else 0.0
+        metrics[f"ndcg_at_{k}"] = dcg / idcg if idcg > 0 else 0.0
 
     # MRR
     for rank, rel in enumerate(relevance, start=1):
@@ -298,10 +298,10 @@ def run_segmenter_comparison(
         baseline_hits = retrieval_fn(question, f"{doc_id}_baseline", 5)
         baseline_metrics = compute_ir_metrics(baseline_hits, judge)
 
-        # Determine winner by recall@5
-        if smart_metrics["recall@5"] > baseline_metrics["recall@5"]:
+        # Determine winner by recall_at_5
+        if smart_metrics["recall_at_5"] > baseline_metrics["recall_at_5"]:
             winner = "smart"
-        elif baseline_metrics["recall@5"] > smart_metrics["recall@5"]:
+        elif baseline_metrics["recall_at_5"] > smart_metrics["recall_at_5"]:
             winner = "baseline"
         else:
             winner = "tie"

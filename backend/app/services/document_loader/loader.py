@@ -23,11 +23,11 @@ def load_document(file_path: str | Path, doc_id: str | None = None) -> list[Docu
     if not path.exists():
         raise DocumentLoaderError(f"文件不存在：{path}")
 
-    if suffix in {".txt", ".md", ".markdown"}:
+    if suffix in {".txt", ".md", ".markdown", ".jsonl"}:
         return load_text_file(path)
     if suffix == ".docx":
         return load_docx_file(path, doc_id=doc_id)
     if suffix == ".pdf":
         return load_pdf_file(path)
 
-    raise DocumentLoaderError(f"暂不支持的文件类型：{suffix or '无后缀'}")
+    raise DocumentLoaderError(f"[LOADER] 暂不支持的文件类型：{suffix or '无后缀'}")

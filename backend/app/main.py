@@ -26,18 +26,12 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     logger.info("startup: initializing model settings")
-    try:
-        initialize_model_settings()
-        logger.info("startup: model settings initialized")
-    except Exception:
-        logger.exception("startup: failed to initialize model settings")
+    initialize_model_settings()
+    logger.info("startup: model settings initialized")
 
-    logger.info("startup: initializing rag store")
-    try:
-        initialize_rag_store()
-        logger.info("startup: rag store initialized")
-    except Exception:
-        logger.exception("startup: failed to initialize rag store")
+    logger.info("startup: initializing rag store (SQLite + ChromaDB)")
+    initialize_rag_store()
+    logger.info("startup: rag store ready")
 
 
 app.include_router(router)

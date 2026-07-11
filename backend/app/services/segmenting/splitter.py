@@ -10,9 +10,49 @@ from backend.app.services.retrieval.embedding import embedding_similarity as emb
 from .heading import heading_level, normalize_heading
 from .models import CandidateChunk, DocumentBlock, SegmentConfig
 
-SENTENCE_PATTERN = re.compile(r"[^。！？!?；;.\n]+[。！？!?；;.]?")
+SENTENCE_PATTERN = re.compile(r"[^。！？!?；;.\n]+(?:[。！？!?；;.]|$)")
 TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\s]")
 PROTECTED_BLOCK_TYPES = {"table", "formula", "code"}
+
+# 句末标点集合 — 用于判断 chunk 是否在句子/语义段落边界结束
+_SENTENCE_END_CHARS = frozenset(")]}。！？…~—～；;」』】》）:：.!?—\"'`")
+
+# 英文缩写模式
+_ABBREVIATION_RE = re.compile(
+    r"(?:^|\s)(?:[A-Z]|Dr|Mr|Mrs|Ms|Prof|etc|vs|e\.g|i\.e|al|St|Rd|Ave|Blvd)\.$",
+    re.IGNORECASE,
+)
+
+
+def _ends_at_sentence_boundary(content: str) -> bool:
+    """Check if content ends at a valid sentence boundary.
+
+    Returns True if the last non-whitespace character is sentence-ending
+    punctuation, and the ending isn't a known abbreviation.
+    """
+    if not content:
+        return True
+    stripped = content.rstrip()
+    if not stripped:
+        return True
+
+    last_char = stripped[-1]
+    if last_char not in _SENTENCE_END_CHARS:
+        return False
+
+    # Filter English abbreviations like "U.S.", "Dr."
+    if last_char == "." and not stripped.endswith(".\"") and not stripped.endswith(".'"):
+        last_word = stripped.rstrip(". ")
+        words = last_word.split()
+        if words:
+            last_token = words[-1]
+            if len(last_token) == 1 and last_token.isupper():
+                return False
+            last_line = stripped.rsplit("\n", 1)[-1]
+            if _ABBREVIATION_RE.search(last_line):
+                return False
+
+    return True
 METRIC_BLOCK_PATTERN = re.compile(
     r"(%|≥|≤|>=|<=|Recall@|nDCG|MRR|命中率|准确率|完整率|忠实度|可答性|"
     r"目标值|验收标准|评价指标|技术指标|不破句率|整体成块率)"
@@ -37,21 +77,40 @@ def build_candidate_chunks(
     current_title_path: list[str] = []
     current_heading_block: DocumentBlock | None = None
 
-    def flush_current(split_reason: str) -> None:
+    def flush_current(split_reason: str, *, force: bool = False) -> bool:
+        """Flush current block group as a chunk candidate.
+
+        Returns True if the flush actually happened, False if it was deferred
+        because the chunk doesn't end at a sentence boundary.
+        """
         nonlocal current_blocks
         if not current_blocks:
-            return
+            return False
         if is_heading_only(current_blocks):
             current_blocks = []
-            return
+            return False
+
+        content = candidate_text(current_blocks)
+
+        # Never flush mid-sentence unless forced or chunk is already oversized
+        if not force and len(content) < config.max_chars:
+            if not _ends_at_sentence_boundary(content):
+                return False  # defer flush — keep accumulating
+
+        # If chunk is oversized but not at sentence boundary,
+        # mark it so split_oversized_chunks knows to split properly
+        if not force and len(content) >= config.max_chars and not _ends_at_sentence_boundary(content):
+            pass  # Flush anyway — split_oversized_chunks will clean it up
+
         candidates.append(make_candidate(current_blocks, current_title_path, split_reason))
         current_blocks = []
+        return True
 
     for block in blocks:
         if block.block_type == "heading":
             current_text = candidate_text(current_blocks) if current_blocks else ""
             if len(current_text) >= config.heading_flush_min_chars:
-                flush_current("heading_boundary")
+                flush_current("heading_boundary", force=True)
             level = heading_level(block.text)
             title = normalize_heading(block.text)
             title_stack = [(item_level, item_title) for item_level, item_title in title_stack if item_level < level]
@@ -68,7 +127,7 @@ def build_candidate_chunks(
         block = annotate_metric_block(block)
 
         if is_protected_block(block):
-            flush_current("before_special_block")
+            flush_current("before_special_block", force=True)
             special_blocks = [block]
             if config.include_heading_in_content and current_heading_block is not None:
                 # 保留标题上下文，避免特殊块脱离语义背景。
@@ -81,7 +140,7 @@ def build_candidate_chunks(
         if current_blocks and not is_heading_only(current_blocks):
             current_text = candidate_text(current_blocks)
             if should_flush_for_semantic_boundary(current_text, block.text, config):
-                flush_current("semantic_boundary")
+                flush_current("semantic_boundary", force=True)
                 if config.include_heading_in_content and current_heading_block is not None:
                     current_blocks = [current_heading_block]
 
@@ -104,7 +163,7 @@ def build_candidate_chunks(
             current_tokens = count_tokens(candidate_text(current_blocks))
             block_tokens = count_tokens(block.text)
             if current_tokens + block_tokens > config.max_tokens and current_tokens >= config.min_tokens:
-                flush_current("pre_add_token_overflow")
+                flush_current("pre_add_token_overflow")  # deferred if mid-sentence
 
         current_blocks.append(block)
 
@@ -113,7 +172,7 @@ def build_candidate_chunks(
             if config.include_heading_in_content and current_heading_block is not None:
                 current_blocks = [current_heading_block]
 
-    flush_current("document_end")
+    flush_current("document_end", force=True)
     return candidates
 
 
@@ -121,18 +180,26 @@ def split_oversized_chunks(
         candidates: list[CandidateChunk],
         config: SegmentConfig,
 ) -> list[CandidateChunk]:
-    """把超长普通 chunk 再按句子边界拆开。"""
+    """把超长 chunk 或末尾非句子边界的 chunk 按句子边界拆开。"""
 
     result: list[CandidateChunk] = []
     for candidate in candidates:
         if candidate["chunk_type"] in PROTECTED_BLOCK_TYPES:
             result.append(candidate)
             continue
-        if candidate["char_count"] <= config.max_chars and candidate["token_count"] <= config.max_tokens:
+
+        content = candidate["content"]
+        needs_resplit = (
+            candidate["char_count"] > config.max_chars
+            or candidate["token_count"] > config.max_tokens
+            or not _ends_at_sentence_boundary(content)
+        )
+
+        if not needs_resplit:
             result.append(candidate)
             continue
 
-        pieces = split_candidate_content(candidate["content"], candidate["source_blocks"], config)
+        pieces = split_candidate_content(content, candidate["source_blocks"], config)
         for index, piece in enumerate(pieces):
             split_candidate = dict(candidate)
             split_candidate["content"] = piece["content"]
@@ -191,6 +258,196 @@ def merge_short_chunks(
     merged = rebalance_short_chunks(merged, config)
     merged = absorb_trailing_short_chunks(merged, config)
     return merged
+
+
+def fix_sentence_boundary_endings(
+    candidates: list[CandidateChunk],
+    config: SegmentConfig,
+) -> list[CandidateChunk]:
+    """Ensure every chunk ends at a sentence boundary.
+
+    For any chunk that ends mid-sentence, merge it with the first sentence
+    of the next chunk (if within max_chars), moving the boundary to the next
+    valid sentence boundary. Chunks that can't be fixed (already oversized)
+    are left as-is.
+    """
+    if len(candidates) <= 1:
+        return candidates
+
+    result: list[CandidateChunk] = []
+    i = 0
+
+    while i < len(candidates):
+        current = dict(candidates[i])
+
+        # Protected blocks and sentence-boundary-ending chunks are fine
+        if current["chunk_type"] in PROTECTED_BLOCK_TYPES:
+            result.append(current)
+            i += 1
+            continue
+
+        if _ends_at_sentence_boundary(current.get("content", "")):
+            result.append(current)
+            i += 1
+            continue
+
+        # Current chunk ends mid-sentence — try to borrow from next chunk
+        if i + 1 >= len(candidates):
+            # Last chunk: can't fix, accept as-is
+            result.append(current)
+            break
+
+        next_chunk = candidates[i + 1]
+        if next_chunk["chunk_type"] in PROTECTED_BLOCK_TYPES:
+            result.append(current)
+            i += 1
+            continue
+
+        # Take the first sentence from the next chunk
+        next_sentences = split_sentences(next_chunk.get("content", ""))
+        if not next_sentences:
+            result.append(current)
+            i += 1
+            continue
+
+        first_sentence = next_sentences[0]
+        new_current_content = f"{current['content']}\n{first_sentence}".strip()
+        new_current_chars = len(new_current_content)
+
+        # Only merge if the result is within max_chars
+        if new_current_chars <= config.max_chars:
+            # Merge first sentence into current chunk
+            current["content"] = new_current_content
+            current["char_count"] = new_current_chars
+            current["token_count"] = count_tokens(new_current_content)
+            current["strategy_info"] = {
+                **current.get("strategy_info", {}),
+                "boundary_fix": "merged_next_sentence",
+            }
+            result.append(current)
+
+            # Remove the first sentence from next chunk
+            remaining = next_sentences[1:]
+            if remaining:
+                next_dict = dict(next_chunk)
+                next_dict["content"] = "".join(remaining).strip()
+                next_dict["char_count"] = len(next_dict["content"])
+                next_dict["token_count"] = count_tokens(next_dict["content"])
+                next_dict["strategy_info"] = {
+                    **next_dict.get("strategy_info", {}),
+                    "boundary_fix": "trimmed_first_sentence",
+                }
+                candidates[i + 1] = next_dict
+                i += 1  # Move to modified next chunk
+            else:
+                # Next chunk is now empty — skip it
+                i += 2
+        else:
+            # Forward merge exceeds max_chars —
+            # try splitting current at last sentence boundary and pushing tail forward
+            curr_sentences = split_sentences(current.get("content", ""))
+            if len(curr_sentences) >= 2:
+                # Take the last sentence off current and prepend to next
+                last_sent = curr_sentences[-1]
+                new_curr = "".join(curr_sentences[:-1]).strip()
+
+                # Only do this if new_curr ends at a sentence boundary
+                if new_curr and _ends_at_sentence_boundary(new_curr):
+                    current["content"] = new_curr
+                    current["char_count"] = len(new_curr)
+                    current["token_count"] = count_tokens(new_curr)
+                    current["strategy_info"] = {
+                        **current.get("strategy_info", {}),
+                        "boundary_fix": "pushed_tail_forward",
+                    }
+
+                    # Prepend to next chunk
+                    next_dict = dict(next_chunk)
+                    next_dict["content"] = f"{last_sent}{next_dict['content']}".strip()
+                    next_dict["char_count"] = len(next_dict["content"])
+                    next_dict["token_count"] = count_tokens(next_dict["content"])
+                    next_dict["strategy_info"] = {
+                        **next_dict.get("strategy_info", {}),
+                        "boundary_fix": "received_tail",
+                    }
+                    candidates[i + 1] = next_dict
+
+            result.append(current)
+            i += 1
+
+    return result
+
+
+def apply_overlap_between_chunks(
+    candidates: list[CandidateChunk],
+    config: SegmentConfig,
+) -> list[CandidateChunk]:
+    """在相邻 chunk 之间施加内容重叠，防止语义信息在边界丢失。
+
+    对每个 chunk（从第二个开始），从前一个 chunk 末尾取
+    overlap_sentences 个句子，附加到当前 chunk 的开头。
+    如果加入重叠后超出 max_chars，则按比例缩减重叠句数。
+
+    特殊块（表格/公式/代码）不参与重叠。
+    """
+    overlap_count = config.overlap_sentences
+    if overlap_count <= 0 or len(candidates) <= 1:
+        return [dict(c) for c in candidates]
+
+    result: list[CandidateChunk] = [dict(candidates[0])]
+
+    for i in range(1, len(candidates)):
+        current = dict(candidates[i])
+        prev = result[-1]  # already processed (with overlap applied)
+
+        # Skip protected blocks — don't add overlap
+        if current["chunk_type"] in PROTECTED_BLOCK_TYPES:
+            result.append(current)
+            continue
+        if prev["chunk_type"] in PROTECTED_BLOCK_TYPES:
+            result.append(current)
+            continue
+
+        # Get last N sentences from previous chunk
+        prev_content = prev["content"]
+        prev_sentences = split_sentences(prev_content)
+        if not prev_sentences:
+            result.append(current)
+            continue
+
+        overlap_sents = prev_sentences[-overlap_count:]
+        overlap_text = "".join(overlap_sents).strip()
+        if not overlap_text:
+            result.append(current)
+            continue
+
+        # Prepend overlap to current chunk, respecting max_chars
+        max_chars = config.max_chars
+        new_content = f"{overlap_text}\n{current['content']}"
+
+        # Trim if too long
+        while len(new_content) > max_chars and len(overlap_sents) > 0:
+            overlap_sents = overlap_sents[1:]  # drop oldest sentence
+            overlap_text = "".join(overlap_sents).strip()
+            if not overlap_text:
+                new_content = current["content"]
+                break
+            new_content = f"{overlap_text}\n{current['content']}"
+
+        current["content"] = new_content
+        current["char_count"] = len(new_content)
+        current["token_count"] = count_tokens(new_content)
+
+        # Mark strategy
+        current["strategy_info"] = {
+            **current.get("strategy_info", {}),
+            "overlap_applied": True,
+            "overlap_sentences": len(overlap_sents),
+        }
+
+        result.append(current)
+
+    return result
 
 
 def is_protected_block(block: DocumentBlock) -> bool:
@@ -449,13 +706,20 @@ def recursive_split_units(text: str, max_chars: int, separators: tuple[str, ...]
         return [stripped]
 
     if not separators:
-        return split_unit_by_length(stripped, max_chars)
+        # 所有分隔符都已尝试但文本仍超长 → 保留整段不切
+        return [stripped]
 
     separator = choose_separator(stripped, separators)
-    remaining_separators = separators[separators.index(separator) + 1 :]
-
     if separator == "":
-        return split_unit_by_length(stripped, max_chars)
+        # 当前 separators 中没有任何分隔符出现在文本里 → 保留整段不切
+        return [stripped]
+
+    # 安全查找分隔符位置（处理嵌套递归中 separator 可能不在当前子集的情况）
+    try:
+        sep_index = separators.index(separator)
+    except ValueError:
+        return [stripped]
+    remaining_separators = separators[sep_index + 1:]
 
     raw_parts = stripped.split(separator)
     units: list[str] = []
@@ -539,12 +803,25 @@ def split_unit_by_length(text: str, max_chars: int) -> list[str]:
 
 
 def best_split_position(text: str, limit: int) -> int:
-    """优先在空白或轻标点处拆分，找不到时才硬切。"""
+    """尽力在句子边界处拆分，找不到时宁肯超长也不在词中硬切。
 
-    candidates = [text.rfind(separator, 0, limit + 1) for separator in (" ", "\n", "\t", ",", "，", "、", ":")]
-    split_at = max(candidates)
-    if split_at >= max(1, limit // 2):
-        return split_at + 1
+    只在句末标点（。！？. ! ?）后拆分，这些是真正的句子边界。
+    如果 limit 范围内找不到任何句子边界，返回 limit（保留整段）。
+    """
+
+    # 优先在句子结束符后切（标点 + 后面的空格/换行）
+    for sep in ("。", "！", "？", ". ", "! ", "? ", ".\n", "!\n", "?\n", ".\" ", ".\"", ".' "):
+        pos = text.rfind(sep, 0, limit + 1)
+        if pos >= max(1, limit // 2):
+            return pos + len(sep)
+
+    # 第二选择：段落边界
+    for sep in ("\n\n", "\n"):
+        pos = text.rfind(sep, 0, limit + 1)
+        if pos >= max(1, limit // 2):
+            return pos + len(sep)
+
+    # 找不到任何合理边界 → 不切
     return limit
 
 

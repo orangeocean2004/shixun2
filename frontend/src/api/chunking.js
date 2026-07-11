@@ -24,7 +24,7 @@ export async function uploadAndSegment({
   })
 }
 
-export async function queryRetrievedChunks({ question }) {
+export async function queryRetrievedChunks({ question, docId }) {
   return apiFetch('/api/query', {
     method: 'POST',
     headers: {
@@ -32,6 +32,12 @@ export async function queryRetrievedChunks({ question }) {
     },
     body: JSON.stringify({
       question,
+      doc_id: docId || undefined,
     }),
   })
 }
+
+export async function fetchBenchmarkResults() {
+  return apiFetch('/api/evaluate/benchmark/results')
+}
+

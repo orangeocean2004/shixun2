@@ -25,6 +25,33 @@ class RetrievedChunk(BaseModel):
     score: float | None = None
 
 
+class EvalQuestionHit(BaseModel):
+    question: str
+    answers: list[str]
+    hits: dict[str, bool]  # {'smart': True, 'heading': False, 'fixed': True}
+
+
+class EvalStrategyResult(BaseModel):
+    strategy: str
+    label: str = ""
+    recall_at_1: float = 0.0
+    recall_at_3: float = 0.0
+    recall_at_5: float = 0.0
+    precision_at_5: float = 0.0
+    ndcg_at_5: float = 0.0
+    mrr: float = 0.0
+
+
+class EvalResult(BaseModel):
+    mode: str = ""  # 'longbench' | 'llm_qa'
+    processed: int = 0
+    strategies: list[EvalStrategyResult] = Field(default_factory=list)
+    question_results: list[EvalQuestionHit] = Field(default_factory=list)
+    total_gain: float = 0.0
+    structure_gain: float = 0.0
+    semantic_gain: float = 0.0
+
+
 class SegmentUploadResponse(BaseModel):
     doc_id: str
     file_name: str
@@ -33,11 +60,20 @@ class SegmentUploadResponse(BaseModel):
     chunks: list[dict[str, Any]]
     statistics: dict[str, Any]
     strategy: dict[str, Any]
+    evaluation: EvalResult | None = None
+
+
+class QAMatch(BaseModel):
+    question: str
+    answer: str
+    chunk_id: str = ""
+    similarity: float = 0.0
 
 
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=50)
+    doc_id: str | None = Field(default=None)
 
 
 class QueryResponse(BaseModel):
@@ -45,6 +81,8 @@ class QueryResponse(BaseModel):
     top_k: int
     answer: str = ""
     chunks: list[RetrievedChunk]
+    matched_qa: QAMatch | None = None
+    answer_covered: bool | None = None
 
 
 class ChunkListResponse(BaseModel):
@@ -77,7 +115,6 @@ class StrategyInfo(BaseModel):
 
 class StrategiesResponse(BaseModel):
     segmentation_strategies: list[StrategyInfo]
-    keyword_strategies: list[str]
     default_config: dict[str, Any]
 
 
@@ -91,7 +128,6 @@ class OrganizeChunkInput(BaseModel):
 class OrganizeRequest(BaseModel):
     doc_id: str = ""
     chunks: list[OrganizeChunkInput]
-    keyword_strategy: str = "jieba_tfidf"
 
 
 class OrganizeChunkOutput(BaseModel):
@@ -130,3 +166,35 @@ class EvaluateResponse(BaseModel):
     doc_id: str
     top_k: int
     strategies: list[StrategyMetrics]
+
+
+# ── Benchmark ──────────────────────────────────────────
+
+class BenchmarkStrategyResult(BaseModel):
+    strategy: str
+    label: str
+    avg_chunk_count: float = 0.0
+    recall_at_1: float = 0.0
+    recall_at_3: float = 0.0
+    recall_at_5: float = 0.0
+    precision_at_5: float = 0.0
+    ndcg_at_5: float = 0.0
+    mrr: float = 0.0
+    processed: int = 0
+
+
+class BenchmarkDatasetResult(BaseModel):
+    dataset: str
+    label: str = ""
+    samples: int = 0
+    processed: int = 0
+    strategies: list[BenchmarkStrategyResult] = Field(default_factory=list)
+    structure_gain: float = 0.0
+    semantic_gain: float = 0.0
+    total_gain: float = 0.0
+
+
+class BenchmarkResultsResponse(BaseModel):
+    results: list[BenchmarkDatasetResult]
+    cached: bool = False
+    last_run: str = ""

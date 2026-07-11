@@ -225,3 +225,4 @@ data/rag/**data/images/
 data/rag/
 data/model_settings.json
 =1.0.15
+data/benchmarks/longbench/data.zip

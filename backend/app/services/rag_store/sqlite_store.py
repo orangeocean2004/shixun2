@@ -55,6 +55,24 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc_ordinal ON chunks(doc_id, ordinal);
+
+CREATE TABLE IF NOT EXISTS qa_pairs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'fallback',
+    answerable INTEGER,
+    answerable_score REAL,
+    faithful INTEGER,
+    faithful_score REAL,
+    quality_score REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(doc_id) REFERENCES documents(doc_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_qa_pairs_doc ON qa_pairs(doc_id);
 """
 
 
@@ -74,6 +92,7 @@ def initialize_sqlite() -> None:
     with _get_conn() as conn:
         conn.executescript(SCHEMA_SQL)
         _ensure_chunk_migration_columns(conn)
+        _ensure_qa_pair_migration_columns(conn)
 
 
 def _ensure_chunk_migration_columns(conn: sqlite3.Connection) -> None:
@@ -82,6 +101,21 @@ def _ensure_chunk_migration_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE chunks ADD COLUMN section_titles_json TEXT NOT NULL DEFAULT '[]'")
     if "retrieval_text" not in columns:
         conn.execute("ALTER TABLE chunks ADD COLUMN retrieval_text TEXT")
+
+
+def _ensure_qa_pair_migration_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(qa_pairs)").fetchall()}
+    migrations = {
+        "source": "ALTER TABLE qa_pairs ADD COLUMN source TEXT NOT NULL DEFAULT 'fallback'",
+        "answerable": "ALTER TABLE qa_pairs ADD COLUMN answerable INTEGER",
+        "answerable_score": "ALTER TABLE qa_pairs ADD COLUMN answerable_score REAL",
+        "faithful": "ALTER TABLE qa_pairs ADD COLUMN faithful INTEGER",
+        "faithful_score": "ALTER TABLE qa_pairs ADD COLUMN faithful_score REAL",
+        "quality_score": "ALTER TABLE qa_pairs ADD COLUMN quality_score REAL",
+    }
+    for column, sql in migrations.items():
+        if column not in columns:
+            conn.execute(sql)
 
 
 def _dump_json(value: Any) -> str:
@@ -280,3 +314,107 @@ def get_chunks_by_ids(chunk_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
             ids,
         ).fetchall()
     return {row["chunk_id"]: _row_to_chunk(row) for row in rows}
+
+
+# ── QA Pairs ─────────────────────────────────────────────
+
+
+def upsert_qa_pairs(doc_id: str, qa_pairs: list[dict[str, Any]], *, replace: bool = True) -> int:
+    """Insert QA pairs for a document.
+
+    Each QA pair dict should have: chunk_id, question, answer. When replace
+    is true, all existing QA pairs for the document are removed first.
+    Returns the number of inserted rows.
+    """
+    if not qa_pairs:
+        return 0
+
+    with _get_conn() as conn:
+        if replace:
+            conn.execute("DELETE FROM qa_pairs WHERE doc_id=?", (doc_id,))
+        count = 0
+        for pair in qa_pairs:
+            chunk_id = pair.get("chunk_id", "")
+            question = (pair.get("question") or "").strip()
+            answer = (pair.get("answer") or "").strip()
+            if not question or not answer:
+                continue
+            conn.execute(
+                """
+                INSERT INTO qa_pairs (
+                    doc_id, chunk_id, question, answer, source,
+                    answerable, answerable_score, faithful, faithful_score, quality_score
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    doc_id,
+                    chunk_id,
+                    question,
+                    answer,
+                    pair.get("source", "fallback"),
+                    _optional_bool_to_int(pair.get("answerable")),
+                    pair.get("answerable_score"),
+                    _optional_bool_to_int(pair.get("faithful")),
+                    pair.get("faithful_score"),
+                    pair.get("quality_score"),
+                ),
+            )
+            count += 1
+    return count
+
+
+def _optional_bool_to_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return 1 if bool(value) else 0
+
+
+def get_qa_pairs_by_doc(doc_id: str) -> list[dict[str, Any]]:
+    """Return all QA pairs for a document as dicts with keys: id, doc_id, chunk_id, question, answer, created_at."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id, doc_id, chunk_id, question, answer, source,
+                answerable, answerable_score, faithful, faithful_score, quality_score,
+                created_at
+            FROM qa_pairs
+            WHERE doc_id=?
+            ORDER BY id
+            """,
+            (doc_id,),
+        ).fetchall()
+    return [_row_to_qa_pair(row) for row in rows]
+
+
+def get_all_qa_pairs() -> list[dict[str, Any]]:
+    """Return all QA pairs across all documents."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id, doc_id, chunk_id, question, answer, source,
+                answerable, answerable_score, faithful, faithful_score, quality_score,
+                created_at
+            FROM qa_pairs
+            ORDER BY doc_id, id
+            """,
+        ).fetchall()
+    return [_row_to_qa_pair(row) for row in rows]
+
+
+def _row_to_qa_pair(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    if item.get("answerable") is not None:
+        item["answerable"] = bool(item["answerable"])
+    if item.get("faithful") is not None:
+        item["faithful"] = bool(item["faithful"])
+    return item
+
+
+def delete_qa_pairs(doc_id: str) -> int:
+    """Delete all QA pairs for a document. Returns the number of deleted rows."""
+    with _get_conn() as conn:
+        cursor = conn.execute("DELETE FROM qa_pairs WHERE doc_id=?", (doc_id,))
+    return cursor.rowcount

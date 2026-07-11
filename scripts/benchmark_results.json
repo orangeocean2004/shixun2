@@ -1,0 +1,49 @@
+[
+  {
+    "dataset": "qasper",
+    "samples": 200,
+    "processed": 200,
+    "strategies": [
+      {
+        "strategy": "smart",
+        "label": "Smart (heading+semantic+protect+overlap)",
+        "avg_chunk_count": 14.61,
+        "recall_at_1": 0.09895880756240663,
+        "recall_at_3": 0.22080072061151781,
+        "recall_at_5": 0.3437256617436571,
+        "precision_at_5": 0.376,
+        "ndcg_at_5": 0.4568022220733334,
+        "mrr": 0.48174999999999996,
+        "processed": 200
+      },
+      {
+        "strategy": "heading",
+        "label": "Heading-based (heading+length only)",
+        "avg_chunk_count": 14.6,
+        "recall_at_1": 0.0956254742290733,
+        "recall_at_3": 0.22580072061151782,
+        "recall_at_5": 0.3404339950769904,
+        "precision_at_5": 0.376,
+        "ndcg_at_5": 0.4542085448108892,
+        "mrr": 0.4759166666666667,
+        "processed": 200
+      },
+      {
+        "strategy": "fixed",
+        "label": "Fixed-length (512-char uniform)",
+        "avg_chunk_count": 36.595,
+        "recall_at_1": 0.06616342788318852,
+        "recall_at_3": 0.13609894378028453,
+        "recall_at_5": 0.21557500507086708,
+        "precision_at_5": 0.309,
+        "ndcg_at_5": 0.37135567664475766,
+        "mrr": 0.43274999999999997,
+        "processed": 200
+      }
+    ],
+    "structure_gain": 57.9,
+    "semantic_gain": 1.0,
+    "total_gain": 59.4,
+    "ndcg_gain": 23.0
+  }
+]

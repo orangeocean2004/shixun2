@@ -22,14 +22,11 @@ class SegmentingSmokeTest(unittest.TestCase):
         self.assertEqual(statistics["source_ref_complete_rate"], 1.0)
         self.assertGreaterEqual(statistics["target_length_hit_rate"], 1.0)
         self.assertLessEqual(statistics["chunk_count"], 6)
-        self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
-        self.assertIn(result["strategy"]["keyword_strategy"], {"jieba_tfidf", "jieba_freq"})
 
         for chunk in result["chunks"]:
             self.assertIn("label", chunk)
             self.assertIsInstance(chunk["label"], list)
-            self.assertTrue(chunk["label"])
-            self.assertTrue(all(isinstance(label, str) for label in chunk["label"]))
+            # label is now populated by ContentOrganizer (LLM), empty during segment
             self.assertIn("summary", chunk)
             self.assertIn("entity_tags", chunk)
             self.assertIn("backlink", chunk)
@@ -55,8 +52,7 @@ class SegmentingSmokeTest(unittest.TestCase):
         for chunk in result["chunks"]:
             self.assertIn("label", chunk)
             self.assertIsInstance(chunk["label"], list)
-            self.assertTrue(chunk["label"])
-            self.assertTrue(all(isinstance(label, str) for label in chunk["label"]))
+            # label is now populated by ContentOrganizer (LLM), empty during segment
             self.assertIn("summary", chunk)
             self.assertIn("entity_tags", chunk)
             self.assertIn("backlink", chunk)
@@ -68,18 +64,6 @@ class SegmentingSmokeTest(unittest.TestCase):
                 set(chunk["backlink"]["source_ref_ids"]),
                 {ref["block_id"] for ref in chunk["source_refs"]},
             )
-
-    def test_keyword_strategy_can_be_switched(self) -> None:
-        text = "分块策略和关键词算法都需要可插拔，以便后续替换底层实现。"
-        result = segment_text(
-            text,
-            doc_id="switch_case",
-            config=SegmentConfig(keyword_strategy="jieba_freq"),
-        )
-
-        self.assertEqual(result["strategy"]["keyword_strategy"], "jieba_freq")
-        self.assertEqual(result["strategy"]["keyword_tokenizer"], "jieba")
-        self.assertTrue(all(isinstance(chunk["label"], list) and chunk["label"] for chunk in result["chunks"]))
 
     def test_markdown_table_is_detected(self) -> None:
         text = """
@@ -157,9 +141,14 @@ class SegmentingSmokeTest(unittest.TestCase):
         text = """
 # 验收标准
 
+本章详细列出了各项技术指标的验收标准和目标值。
+
 不破句率: 100%
 目标长度区间命中率 ≥ 90%
 整体成块率 ≥ 95%
+检索提升 Recall@5 提升幅度 ≥ 10%
+
+以上指标需要通过自动化评测和人工评估双重验证。
 """.strip()
         result = segment_text(text, doc_id="metric_case")
 

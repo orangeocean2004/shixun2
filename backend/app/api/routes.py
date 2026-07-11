@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Query, UploadFile
 
 from backend.app.core.config import (
     ALLOWED_UPLOAD_SUFFIXES,
@@ -39,12 +39,357 @@ from backend.app.services.rag_store.service import (
     RAGDocumentNotReadyError,
     RAGValidationError,
 )
-from backend.app.services.segmenting.keyword_extraction import (
-    DEFAULT_KEYWORD_STRATEGY,
-    list_keyword_strategies,
-)
 
 router = APIRouter()
+
+
+def _generate_qa_fallback(chunks: list[dict]) -> list[dict]:
+    """Generate simple QA pairs from chunk content without LLM.
+
+    Extracts first key sentence from each chunk as the answer and creates a
+    question from the title path. Used when no LLM API key is configured.
+    """
+    import re as _re
+
+    qa_pairs = []
+    sentence_pat = _re.compile(r"[^。！？.!?\n]+[。！？.!?]")
+
+    for chunk in chunks[:12]:
+        content = (chunk.get("content") or "").strip()
+        if not content:
+            continue
+
+        title_path = chunk.get("title_path") or []
+        title = " > ".join(title_path) if title_path else ""
+
+        # Extract first meaningful sentence as answer
+        sentences = sentence_pat.findall(content)
+        answer = ""
+        for s in sentences:
+            s_clean = s.strip()
+            if len(s_clean) >= 10:
+                answer = s_clean
+                break
+        if not answer:
+            answer = content[:200].strip()
+
+        terms = _extract_fallback_question_terms(answer or content)
+        topic = "、".join(terms[:4])
+
+        # Build a retrievable question. Generic questions such as
+        # "这段内容的关键信息是什么" do not contain enough lexical signal for
+        # automatic retrieval evaluation.
+        if title and topic:
+            question = f"{title}部分关于{topic}的核心内容是什么？"
+        elif topic:
+            question = f"文档中关于{topic}的内容是什么？"
+        elif title:
+            question = f"{title}部分的核心内容是什么？"
+        else:
+            question = f"这段内容的关键信息是什么？"
+
+        qa_pairs.append({
+            "question": question,
+            "answer": answer,
+            "chunk_id": chunk.get("chunk_id", ""),
+        })
+
+        if len(qa_pairs) >= 10:
+            break
+
+    return qa_pairs
+
+
+
+def _extract_fallback_question_terms(text: str) -> list[str]:
+    import re as _re
+
+    stopwords = {
+        "本文", "文档", "内容", "部分", "核心", "主要", "进行", "通过",
+        "以及", "可以", "需要", "实现", "支持", "相关", "一个", "一种",
+        "如何", "什么", "其中", "使用", "用于", "要求",
+    }
+    terms: list[str] = []
+
+    for term in (
+        "RAG", "智能分段", "内容组织", "语义感知", "结构感知",
+        "检索评测", "Recall", "nDCG", "MRR", "FastAPI", "Vue",
+    ):
+        if term.lower() in (text or "").lower() and term not in terms:
+            terms.append(term)
+
+    try:
+        import jieba
+        candidates = jieba.lcut(text or "")
+    except Exception:
+        candidates = _re.findall(r"[A-Za-z][A-Za-z0-9_@.+-]{1,}|[\u4e00-\u9fff]{2,6}", text or "")
+
+    for raw in candidates:
+        term = raw.strip(" ，。！？；：、()（）[]【】《》\"'")
+        if not term or term in stopwords:
+            continue
+        if _re.fullmatch(r"[\u4e00-\u9fff]", term):
+            continue
+        if len(term) >= 2 and term not in terms:
+            terms.append(term)
+        if len(terms) >= 6:
+            break
+    return terms
+
+
+def _prepare_qa_pairs_for_storage(qa_pairs: list[dict], source: str) -> list[dict]:
+    prepared: list[dict] = []
+    for pair in qa_pairs:
+        item = dict(pair)
+        item["chunk_id"] = item.get("chunk_id") or item.get("source_chunk_id") or ""
+        item["source"] = source
+        prepared.append(item)
+    return prepared
+
+
+def _ensure_fallback_qa_pairs(doc_id: str, chunks: list[dict]) -> list[dict]:
+    from backend.app.services.rag_store.sqlite_store import get_qa_pairs_by_doc, upsert_qa_pairs
+
+    stored_pairs = get_qa_pairs_by_doc(doc_id)
+    if stored_pairs:
+        if any(pair.get("source") != "fallback" for pair in stored_pairs):
+            return stored_pairs
+        if any("关于" in (pair.get("question") or "") for pair in stored_pairs):
+            return stored_pairs
+
+    qa_pairs = _prepare_qa_pairs_for_storage(_generate_qa_fallback(chunks), "fallback")
+    if qa_pairs:
+        upsert_qa_pairs(doc_id, qa_pairs, replace=bool(stored_pairs))
+    return qa_pairs
+
+
+def _generate_qa_for_chunks(chunks: list[dict]) -> list[dict]:
+    """Use LLM to generate QA pairs from chunks for evaluation.
+
+    Returns list of {'question': str, 'answer': str} dicts.
+    """
+    try:
+        from backend.app.services.organizer.model_client import LLMClient
+        from backend.app.core.model_settings import get_model_settings
+
+        settings = get_model_settings()
+        llm = LLMClient(
+            api_key=settings["OPENAI_API_KEY"],
+            base_url=settings["OPENAI_BASE_URL"],
+            model=settings["LLM_MODEL"],
+        )
+        if not llm.is_available:
+            return _generate_qa_fallback(chunks)
+
+        qa_pairs = []
+        system_prompt = (
+            "你是问答对生成器。根据文档片段生成1-2个问答对。"
+            "严格输出 JSON 数组：[{\"question\":\"...\",\"answer\":\"...\"}]"
+        )
+
+        for chunk in chunks[:5]:  # Limit to first 5 chunks for speed
+            content = (chunk.get("content") or "")[:1000].strip()
+            if not content:
+                continue
+            title = " > ".join(chunk.get("title_path") or []) or ""
+            prompt = f"标题：{title}\n\n内容：{content}" if title else content
+
+            raw = llm.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.7,
+                max_tokens=200,
+            )
+            if not raw:
+                continue
+
+            # Parse JSON from LLM output
+            import json as _json
+            import re as _re
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1]
+            if raw.endswith("```"):
+                raw = raw.rsplit("\n", 1)[0]
+            try:
+                pairs = _json.loads(raw)
+            except _json.JSONDecodeError:
+                m = _re.search(r"\[.*\]", raw, re.DOTALL)
+                if not m:
+                    continue
+                try:
+                    pairs = _json.loads(m.group())
+                except _json.JSONDecodeError:
+                    continue
+            if not isinstance(pairs, list):
+                continue
+
+            chunk_id = chunk.get("chunk_id") or ""
+            for pair in pairs:
+                q = (pair.get("question") or "").strip()
+                a = (pair.get("answer") or "").strip()
+                if q and a:
+                    qa_pairs.append({"question": q, "answer": a, "chunk_id": chunk_id})
+
+            if len(qa_pairs) >= 8:  # Target ~8 QA pairs for quick eval
+                break
+
+        return qa_pairs[:10]
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("QA generation failed", exc_info=True)
+        return []
+
+
+# In-memory cache for background evaluation results
+_eval_cache: dict[str, dict] = {}
+
+
+def _enrich_chunks_with_llm(chunks: list[dict]) -> None:
+    """Enrich chunks with LLM-generated tags and summaries (batched, synchronous)."""
+    from backend.app.core.model_settings import get_model_settings
+    from backend.app.services.organizer.model_client import LLMClient
+    from backend.app.services.organizer.organizer import ContentOrganizer
+
+    settings = get_model_settings()
+    llm = LLMClient(
+        api_key=settings["OPENAI_API_KEY"],
+        base_url=settings["OPENAI_BASE_URL"],
+        model=settings["LLM_MODEL"],
+    )
+    if not llm.is_available:
+        return
+
+    organizer = ContentOrganizer(llm_client=llm)
+    results, _doc_summary = organizer.organize_batch_fast(chunks)
+
+    for chunk, result in zip(chunks, results):
+        if result.tags:
+            chunk["label"] = result.tags
+        if result.summary:
+            chunk["summary"] = result.summary
+
+
+def _background_qa_evaluate(doc_id: str, chunks: list[dict]) -> None:
+    """Run QA generation + evaluation in background. Persist QA pairs to SQLite.
+
+    Uses fallback QA generation (no LLM) for speed and reliability.
+    LLM-based QA is available via the /api/synthesize-qa endpoint (QA 合成 tab).
+    """
+    try:
+        print(f"[Eval] Starting for doc_id={doc_id}, chunks={len(chunks)}")
+        qa_pairs = _ensure_fallback_qa_pairs(doc_id, chunks)
+        print(f"[Eval] Using {len(qa_pairs)} QA pairs")
+        if not qa_pairs:
+            print(f"[Eval] No QA pairs, aborting")
+            return
+
+        # ── Evaluate FIRST (fast, no DB dependency) ──
+        raw_text = "\n\n".join(c.get("content", "") for c in chunks)
+        from backend.app.services.evaluation.evaluator import evaluate_with_qa_pairs
+        print(f"[Eval] Running evaluation...")
+        evaluation_raw = evaluate_with_qa_pairs(raw_text, qa_pairs)
+        print(f"[Eval] Done: {evaluation_raw is not None}, keys={list(evaluation_raw.keys()) if evaluation_raw else 'NONE'}")
+        if evaluation_raw:
+            _eval_cache[doc_id] = evaluation_raw
+            print(f"[Eval] CACHED for {doc_id}")
+        else:
+            print(f"[Eval] evaluate_with_qa_pairs returned None!")
+
+    except Exception:
+        import traceback
+        print(f"[Eval] CRASHED:")
+        traceback.print_exc()
+
+
+def _background_longbench_finalize(
+    doc_id: str,
+    file_name: str,
+    file_size: int,
+    file_sha256: str,
+    all_chunks: list[dict],
+    sample_doc_ids: list[str],
+    seg_result: dict,
+    payload: bytes,
+) -> None:
+    """Background: ChromaDB storage + LongBench evaluation for JSONL uploads.
+
+    Segmentation already ran synchronously; this handles the slow parts
+    (ChromaDB vector upsert, three-strategy evaluation) without blocking
+    the HTTP response.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # ── 1. Store document record ──
+    try:
+        from backend.app.services.rag_store.sqlite_store import (
+            upsert_document_processing,
+            mark_document_ready,
+        )
+        upsert_document_processing(
+            doc_id=doc_id,
+            file_name=file_name,
+            file_sha256=file_sha256,
+            file_size=file_size,
+            block_count=0,
+        )
+    except Exception:
+        logger.warning("LongBench background: document record failed", exc_info=True)
+        return
+
+    # ── 2. ChromaDB vector storage ──
+    try:
+        from backend.app.services.rag_store.sqlite_store import replace_chunks
+        from backend.app.services.rag_store.chroma_store import (
+            delete_document_vectors,
+            upsert_chunks,
+        )
+
+        replace_chunks(doc_id, all_chunks)
+        for did in sample_doc_ids:
+            try:
+                delete_document_vectors(did)
+            except Exception:
+                pass
+        upsert_chunks(doc_id, all_chunks)
+    except Exception:
+        logger.warning("LongBench background: ChromaDB failed", exc_info=True)
+
+    # ── 3. Mark document ready ──
+    try:
+        from backend.app.services.rag_store.sqlite_store import mark_document_ready as _mark_ready
+        _mark_ready(
+            doc_id=doc_id,
+            chunk_count=len(all_chunks),
+            strategy=seg_result.get("strategy", {}),
+            statistics=seg_result.get("statistics", {}),
+            preprocess={},
+        )
+    except Exception:
+        logger.warning("LongBench background: mark ready failed", exc_info=True)
+
+    # ── 4. Generate QA pairs + persist to SQLite ──
+    try:
+        from backend.app.services.rag_store.sqlite_store import get_qa_pairs_by_doc, upsert_qa_pairs
+        qa_pairs = get_qa_pairs_by_doc(doc_id)
+        if not qa_pairs:
+            qa_pairs = _prepare_qa_pairs_for_storage(_generate_qa_for_chunks(all_chunks), "llm")
+            if not qa_pairs:
+                qa_pairs = _prepare_qa_pairs_for_storage(_generate_qa_fallback(all_chunks), "fallback")
+            if qa_pairs:
+                upsert_qa_pairs(doc_id, qa_pairs, replace=False)
+    except Exception:
+        logger.warning("LongBench background: QA pairs failed", exc_info=True)
+
+    # ── 5. Run LongBench evaluation ──
+    try:
+        from backend.app.services.evaluation.evaluator import evaluate_longbench
+        evaluation_raw = evaluate_longbench(payload, max_samples=30)
+        if evaluation_raw:
+            _eval_cache[doc_id] = evaluation_raw
+    except Exception:
+        logger.warning("LongBench background: evaluation failed", exc_info=True)
 
 
 @router.get("/health")
@@ -65,49 +410,181 @@ def update_model_settings_api(payload: ModelSettingsPayload) -> ModelSettingsRes
 
 @router.post("/api/segment/upload", response_model=SegmentUploadResponse)
 async def upload_and_segment(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     doc_id: Optional[str] = Form(None),
     min_chars: int = Form(DEFAULT_MIN_CHARS),
     target_chars: int = Form(DEFAULT_TARGET_CHARS),
     max_chars: int = Form(DEFAULT_MAX_CHARS),
     overlap_sentences: int = Form(DEFAULT_OVERLAP_SENTENCES),
-    keyword_strategy: str = Form(DEFAULT_KEYWORD_STRATEGY),
 ) -> SegmentUploadResponse:
     filename = file.filename or "upload"
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_UPLOAD_SUFFIXES:
-        raise HTTPException(status_code=400, detail=f"暂不支持的文件类型：{suffix or '无后缀'}")
+        raise HTTPException(status_code=400, detail=f"[ROUTE] 暂不支持的文件类型：{suffix or '无后缀'}")
 
     if min_chars <= 0 or target_chars <= 0 or max_chars <= 0 or overlap_sentences < 0:
         raise HTTPException(status_code=400, detail="分段参数必须为正数，且 overlap_sentences 不能小于 0")
     if not (min_chars <= target_chars <= max_chars):
         raise HTTPException(status_code=400, detail="分段参数需满足 min_chars <= target_chars <= max_chars")
 
-    normalized_keyword_strategy = (keyword_strategy or "").strip().lower() or DEFAULT_KEYWORD_STRATEGY
-    supported_keyword_strategies = set(list_keyword_strategies())
-    if normalized_keyword_strategy not in supported_keyword_strategies:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "keyword_strategy 不支持，当前可选："
-                + ", ".join(sorted(supported_keyword_strategies))
-            ),
-        )
-
     try:
         payload = await file.read()
         result_doc_id = doc_id.strip() if doc_id and doc_id.strip() else safe_doc_id(Path(filename).stem)
-        result = ingest_document(
-            file_name=filename,
-            payload=payload,
-            doc_id=result_doc_id,
-            min_chars=min_chars,
-            target_chars=target_chars,
-            max_chars=max_chars,
-            overlap_sentences=overlap_sentences,
-            keyword_strategy=normalized_keyword_strategy,
+
+        # ── Detect LongBench JSONL ──────────────────────────
+        from backend.app.services.evaluation.evaluator import (
+            evaluate_longbench,
+            evaluate_with_qa_pairs,
+            is_longbench_jsonl,
         )
 
+        is_longbench = suffix == ".jsonl" and is_longbench_jsonl(payload)
+
+        if is_longbench:
+            # LongBench mode: segment ALL samples synchronously (for full
+            # frontend display), defer ChromaDB + evaluation to background.
+            import json as _json
+            from backend.app.services.segmenting import segment_text
+            import hashlib as _hashlib
+
+            samples_raw = payload.decode("utf-8").strip().split("\n")
+            all_samples: list[dict] = []
+            for line in samples_raw:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = _json.loads(line)
+                    if obj.get("context") and obj.get("input") and obj.get("answers"):
+                        all_samples.append(obj)
+                except _json.JSONDecodeError:
+                    continue
+
+            if not all_samples:
+                raise HTTPException(status_code=400, detail="LongBench JSONL 中没有有效的样本")
+
+            first_context = all_samples[0].get("context", "") if all_samples else ""
+
+            # ── Segment ALL samples synchronously ──────────────
+            seg_result = segment_text(
+                first_context,
+                doc_id=result_doc_id,
+                config=None,
+            )
+            all_chunks: list[dict] = list(seg_result["chunks"])
+            sample_doc_ids = [result_doc_id]
+            total_chars = sum(int(c.get("char_count", 0)) for c in seg_result["chunks"])
+            total_segmented = 1
+
+            for i, sample in enumerate(all_samples):
+                if i == 0:
+                    continue
+                sample_ctx = sample.get("context", "")
+                if not sample_ctx.strip():
+                    continue
+                sid = f"{result_doc_id}_{i}"
+                sample_doc_ids.append(sid)
+                try:
+                    sr = segment_text(sample_ctx, doc_id=sid, config=None)
+                    all_chunks.extend(sr["chunks"])
+                    total_chars += sum(int(c.get("char_count", 0)) for c in sr["chunks"])
+                    total_segmented += 1
+                except Exception:
+                    pass
+
+            # ── Aggregate statistics across all samples ────────
+            agg_statistics = dict(seg_result.get("statistics", {}))
+            agg_statistics["total_chunks"] = len(all_chunks)
+            agg_statistics["total_chars"] = total_chars
+            agg_statistics["avg_chunk_size"] = round(total_chars / len(all_chunks), 1) if all_chunks else 0
+            agg_statistics["samples_segmented"] = total_segmented
+            agg_statistics["total_samples"] = len(all_samples)
+
+            result = {
+                "doc_id": result_doc_id,
+                "file_name": filename,
+                "file_size": len(payload),
+                "block_count": 0,
+                "chunks": all_chunks,  # return ALL chunks for frontend display
+                "statistics": agg_statistics,
+                "strategy": seg_result["strategy"],
+            }
+
+            # ── Defer ChromaDB + evaluation to background ─────
+            _file_sha256 = _hashlib.sha256(payload).hexdigest()
+            evaluation_raw = None
+            background_tasks.add_task(
+                _background_longbench_finalize,
+                doc_id=result_doc_id,
+                file_name=filename,
+                file_size=len(payload),
+                file_sha256=_file_sha256,
+                all_chunks=all_chunks,
+                sample_doc_ids=sample_doc_ids,
+                seg_result=seg_result,
+                payload=payload,
+            )
+        else:
+            # Regular mode: normal ingestion
+            print(f"[Upload] Regular file upload: {filename}")
+            result = ingest_document(
+                file_name=filename,
+                payload=payload,
+                doc_id=result_doc_id,
+                min_chars=min_chars,
+                target_chars=target_chars,
+                max_chars=max_chars,
+                overlap_sentences=overlap_sentences,
+            )
+
+            # ── Run evaluation using persisted QA pairs; create fallback QA only when absent ──
+            evaluation_raw = None
+            try:
+                qa_pairs = _ensure_fallback_qa_pairs(result_doc_id, result["chunks"])
+                print(f"[EvalSync] Using {len(qa_pairs)} QA pairs for {result_doc_id}")
+                if qa_pairs:
+                    raw_text = "\n\n".join(c.get("content", "") for c in result["chunks"])
+                    from backend.app.services.evaluation.evaluator import evaluate_with_qa_pairs
+                    evaluation_raw = evaluate_with_qa_pairs(raw_text, qa_pairs)
+                    print(f"[EvalSync] Evaluation done: {list(evaluation_raw.keys()) if evaluation_raw else 'NONE'}")
+            except Exception as e:
+                import traceback
+                print(f"[EvalSync] FAILED: {e}")
+                traceback.print_exc()
+
+            # Enrichment runs in background (LLM calls may be slow)
+            background_tasks.add_task(
+                _enrich_chunks_with_llm,
+                result["chunks"],
+            )
+
+        # ── Convert evaluation to Pydantic ──────────────────
+        evaluation = None
+        if evaluation_raw:
+            try:
+                from backend.app.models.schemas import EvalQuestionHit, EvalResult, EvalStrategyResult
+                evaluation = EvalResult(
+                    mode=evaluation_raw.get("mode", ""),
+                    processed=evaluation_raw.get("processed", 0),
+                    strategies=[
+                        EvalStrategyResult(**s)
+                        for s in evaluation_raw.get("strategies", [])
+                    ],
+                    question_results=[
+                        EvalQuestionHit(**qr)
+                        for qr in evaluation_raw.get("question_results", [])
+                    ],
+                    total_gain=evaluation_raw.get("total_gain", 0.0),
+                    structure_gain=evaluation_raw.get("structure_gain", 0.0),
+                    semantic_gain=evaluation_raw.get("semantic_gain", 0.0),
+                )
+            except Exception:
+                import traceback
+                print(f"[EvalSync] Pydantic conversion FAILED:")
+                traceback.print_exc()
+
+        print(f"[EvalSync] Final evaluation={evaluation is not None}")
         return SegmentUploadResponse(
             doc_id=result["doc_id"],
             file_name=result["file_name"],
@@ -116,6 +593,7 @@ async def upload_and_segment(
             chunks=result["chunks"],
             statistics=result["statistics"],
             strategy=result["strategy"],
+            evaluation=evaluation,
         )
     except DocumentLoaderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -131,50 +609,137 @@ async def upload_and_segment(
         await file.close()
 
 
+def _find_best_qa_match(question: str, qa_pairs: list[dict], threshold: float = 0.70) -> dict | None:
+    """Use embedding similarity to find the best-matching QA pair for a question.
+
+    Returns the matched QA pair dict with an extra 'similarity' key, or None if
+    no pair exceeds *threshold*.
+    """
+    if not qa_pairs:
+        return None
+
+    try:
+        from backend.app.services.retrieval.embedding import embedding_similarity
+    except ImportError:
+        return None
+
+    best_pair: dict | None = None
+    best_similarity = 0.0
+
+    for pair in qa_pairs:
+        stored_q = pair.get("question", "").strip()
+        if not stored_q:
+            continue
+        sim = embedding_similarity(question, stored_q)
+        if sim is not None and sim > best_similarity:
+            best_similarity = sim
+            best_pair = pair
+
+    if best_pair and best_similarity >= threshold:
+        result = dict(best_pair)
+        result["similarity"] = round(best_similarity, 4)
+        return result
+    return None
+
+
+def _check_answer_coverage(chunks: list[dict], answer: str) -> bool:
+    """Return True if *answer* appears (normalized) inside the retrieved chunks."""
+    if not answer or not answer.strip():
+        return False
+
+    # Normalize: keep only alphanumeric + CJK characters
+    def _norm(text: str) -> str:
+        result: list[str] = []
+        for ch in text:
+            if ch.isalnum() or ("一" <= ch <= "鿿"):
+                result.append(ch)
+        return "".join(result).lower()
+
+    norm_answer = _norm(answer)
+    if len(norm_answer) < 2:
+        return False
+
+    combined = "\n".join(c.get("content", "") for c in chunks)
+    return norm_answer in _norm(combined)
+
+
 @router.post("/api/query", response_model=QueryResponse)
 def query_retrieved_chunks(payload: QueryRequest) -> QueryResponse:
     try:
+        from backend.app.models.schemas import QAMatch
+
         top_k = payload.top_k if payload.top_k > 0 else DEFAULT_RETRIEVE_TOP_K
-        result = retrieve_chunks(
-            question=payload.question,
-            top_k=top_k,
-        )
+
+        # ── Step 1: Try to match against stored QA pairs ──
+        matched_qa: QAMatch | None = None
+        if payload.doc_id:
+            try:
+                from backend.app.services.rag_store.sqlite_store import get_qa_pairs_by_doc
+
+                stored_pairs = get_qa_pairs_by_doc(payload.doc_id)
+                match = _find_best_qa_match(payload.question, stored_pairs)
+                if match:
+                    matched_qa = QAMatch(
+                        question=match["question"],
+                        answer=match["answer"],
+                        chunk_id=match.get("chunk_id", ""),
+                        similarity=match.get("similarity", 0.0),
+                    )
+            except ImportError:
+                pass
+
+        # ── Step 2: Retrieve chunks (always needed for context) ──
+        retrieve_kwargs = {"question": payload.question, "top_k": top_k}
+        if payload.doc_id:
+            retrieve_kwargs["doc_id"] = payload.doc_id
+        result = retrieve_chunks(**retrieve_kwargs)
+        result_chunks: list[dict] = result.get("chunks", [])
+
+        # ── Step 3: Determine answer ──
         answer = ""
+        answer_covered: bool | None = None
 
-        # 尝试用 LLM 根据检索到的 chunk 生成回答
-        try:
-            from backend.app.services.organizer.model_client import LLMClient
+        if matched_qa:
+            # Use the stored QA answer directly — it was generated from the source chunk
+            answer = matched_qa.answer
+            answer_covered = _check_answer_coverage(result_chunks, matched_qa.answer)
+        else:
+            # No QA match — fall back to LLM generation from retrieved chunks
+            try:
+                from backend.app.services.organizer.model_client import LLMClient
 
-            settings = get_model_settings()
-            llm = LLMClient(
-                api_key=settings["OPENAI_API_KEY"],
-                base_url=settings["OPENAI_BASE_URL"],
-                model=settings["LLM_MODEL"],
-            )
-            if llm.is_available and result.get("chunks"):
-                context_parts = []
-                for c in result["chunks"]:
-                    title = " > ".join(c.get("title_path", [])) or "无标题"
-                    context_parts.append(f"[{title}]\n{c.get('content', '')[:800]}")
-                context = "\n\n---\n\n".join(context_parts)
+                settings = get_model_settings()
+                llm = LLMClient(
+                    api_key=settings["OPENAI_API_KEY"],
+                    base_url=settings["OPENAI_BASE_URL"],
+                    model=settings["LLM_MODEL"],
+                )
+                if llm.is_available and result_chunks:
+                    context_parts: list[str] = []
+                    for c in result_chunks:
+                        title = " > ".join(c.get("title_path", [])) or "无标题"
+                        context_parts.append(f"[{title}]\n{c.get('content', '')[:800]}")
+                    context = "\n\n---\n\n".join(context_parts)
 
-                answer = llm.generate(
-                    f"根据以下文档片段回答问题。如果片段中没有足够信息，请如实说明。\n\n"
-                    f"文档片段：\n{context}\n\n"
-                    f"问题：{payload.question}\n\n"
-                    f"回答：",
-                    system_prompt="你是基于文档的问答助手。只根据提供的文档片段回答，不添加外部知识。",
-                    temperature=0.3,
-                    max_tokens=512,
-                ).strip()
-        except Exception:
-            pass  # LLM 生成失败不影响检索结果返回
+                    answer = llm.generate(
+                        "根据以下文档片段回答问题。如果片段中没有足够信息，请如实说明。\n\n"
+                        f"文档片段：\n{context}\n\n"
+                        f"问题：{payload.question}\n\n"
+                        f"回答：",
+                        system_prompt="你是基于文档的问答助手。只根据提供的文档片段回答，不添加外部知识。",
+                        temperature=0.3,
+                        max_tokens=512,
+                    ).strip()
+            except Exception:
+                pass  # LLM 生成失败不影响检索结果返回
 
         return QueryResponse(
             question=payload.question,
             top_k=top_k or DEFAULT_RETRIEVE_TOP_K,
             answer=answer,
-            chunks=result.get("chunks", []),
+            chunks=result_chunks,
+            matched_qa=matched_qa,
+            answer_covered=answer_covered,
         )
     except RAGValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -221,6 +786,10 @@ def synthesize_qa(payload: dict = Body(...)):
     from backend.app.services.organizer.model_client import LLMClient
 
     chunks = payload.get("chunks", [])
+    doc_id = (payload.get("doc_id") or "").strip()
+    save_mode = payload.get("save_mode") or "replace"
+    if save_mode not in {"replace", "append"}:
+        raise HTTPException(status_code=400, detail="save_mode 只能是 replace 或 append")
     if not chunks:
         raise HTTPException(status_code=400, detail="chunks 不能为空")
 
@@ -292,6 +861,7 @@ def synthesize_qa(payload: dict = Body(...)):
                 "id": f"qa_{len(qa_pairs) + 1:04d}",
                 "question": question,
                 "answer": answer,
+                "source": "llm",
                 "source_chunk_id": chunk.get("chunk_id", ""),
                 "title_path": chunk.get("title_path", []),
                 "answerable": quality.answerable,
@@ -301,7 +871,51 @@ def synthesize_qa(payload: dict = Body(...)):
                 "quality_score": quality.quality_score,
             })
 
-    return {"qa_pairs": qa_pairs, "total": len(qa_pairs)}
+    if not qa_pairs:
+        qa_pairs = _prepare_qa_pairs_for_storage(_generate_qa_fallback(chunks), "fallback")
+
+    saved = 0
+    evaluation_raw = None
+    prepared_pairs = _prepare_qa_pairs_for_storage(
+        qa_pairs,
+        "llm" if any((pair.get("source") == "llm") for pair in qa_pairs) else "fallback",
+    )
+    eval_pairs = prepared_pairs
+
+    if doc_id and prepared_pairs:
+        from backend.app.services.rag_store.sqlite_store import get_qa_pairs_by_doc, upsert_qa_pairs
+
+        try:
+            saved = upsert_qa_pairs(
+                doc_id,
+                prepared_pairs,
+                replace=(save_mode == "replace"),
+            )
+            stored_pairs = get_qa_pairs_by_doc(doc_id)
+            if stored_pairs:
+                eval_pairs = stored_pairs
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("QA pair persistence failed; evaluating in-memory pairs", exc_info=True)
+
+    if eval_pairs:
+        try:
+            from backend.app.services.evaluation.evaluator import evaluate_with_qa_pairs
+
+            raw_text = "\n\n".join(chunk.get("content", "") for chunk in chunks)
+            evaluation_raw = evaluate_with_qa_pairs(raw_text, eval_pairs)
+            if doc_id and evaluation_raw:
+                _eval_cache[doc_id] = evaluation_raw
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("QA synthesis evaluation refresh failed", exc_info=True)
+    return {
+        "qa_pairs": qa_pairs,
+        "total": len(qa_pairs),
+        "saved": saved,
+        "save_mode": save_mode if doc_id else "",
+        "evaluation": evaluation_raw,
+    }
 
 
 # ── /strategies ──────────────────────────────────────────
@@ -331,7 +945,6 @@ def list_strategies() -> StrategiesResponse:
                 description="固定 512 字符均匀切分，无结构感知，作为基线对照",
             ),
         ],
-        keyword_strategies=list(list_keyword_strategies()),
         default_config={
             "min_chars": config.min_chars,
             "target_chars": config.target_chars,
@@ -339,7 +952,6 @@ def list_strategies() -> StrategiesResponse:
             "overlap_sentences": config.overlap_sentences,
             "enable_semantic_boundary": config.enable_semantic_boundary,
             "semantic_boundary_threshold": config.semantic_boundary_threshold,
-            "keyword_strategy": config.keyword_strategy,
         },
     )
 
@@ -350,12 +962,19 @@ def list_strategies() -> StrategiesResponse:
 @router.post("/api/organize", response_model=OrganizeResponse)
 def organize_chunks(payload: OrganizeRequest) -> OrganizeResponse:
     """对已有 chunks 独立执行内容组织（标签、摘要、实体）。"""
+    from backend.app.services.organizer.model_client import LLMClient
     from backend.app.services.organizer.organizer import ContentOrganizer
 
     if not payload.chunks:
         raise HTTPException(status_code=400, detail="chunks 不能为空")
 
-    organizer = ContentOrganizer()
+    settings = get_model_settings()
+    llm = LLMClient(
+        model=settings["LLM_MODEL"],
+        api_key=settings["OPENAI_API_KEY"],
+        base_url=settings["OPENAI_BASE_URL"],
+    )
+    organizer = ContentOrganizer(llm_client=llm)
     chunk_dicts = [{"chunk_id": c.chunk_id, "content": c.content} for c in payload.chunks]
     results, doc_summary = organizer.organize_batch(chunk_dicts, doc_id=payload.doc_id)
 
@@ -378,24 +997,12 @@ def organize_chunks(payload: OrganizeRequest) -> OrganizeResponse:
 # ── /evaluate ────────────────────────────────────────────
 
 
-def _avg(values: list[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
-
-
 @router.post("/api/evaluate", response_model=EvaluateResponse)
 def evaluate_document(payload: EvaluateRequest) -> EvaluateResponse:
     """对已上传的文档运行三策略对比评测，返回检索指标。"""
-    from backend.app.services.evaluation import (
-        EmbeddingRelevance,
-        compute_ir_metrics,
-        fixed_length_segment,
-        heading_based_segment,
-    )
     from backend.app.services.rag_store.sqlite_store import get_chunks_by_doc, get_document
-    from backend.app.services.retrieval import EmbeddingStore
-    from backend.app.services.segmenting import SegmentConfig, segment_text
+    from backend.app.services.evaluation.evaluator import evaluate_with_qa_pairs
 
-    # 验证文档存在且就绪
     doc = get_document(payload.doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"文档不存在：{payload.doc_id}")
@@ -403,84 +1010,31 @@ def evaluate_document(payload: EvaluateRequest) -> EvaluateResponse:
         raise HTTPException(status_code=409, detail=f"文档未就绪，当前状态：{doc['status']}")
 
     doc_id = payload.doc_id
-
-    # 从已存储的 chunks 重建原始文本
     stored_chunks = get_chunks_by_doc(doc_id)
     if not stored_chunks:
         raise HTTPException(status_code=404, detail="该文档没有已分段的 chunks")
 
     raw_text = "\n\n".join(c.get("content", "") for c in stored_chunks)
+    stored_qa_pairs = _ensure_fallback_qa_pairs(doc_id, stored_chunks)
+    if not stored_qa_pairs:
+        raise HTTPException(status_code=400, detail="该文档没有可用的 QA 评测样本")
 
-    config = SegmentConfig()
-    store = EmbeddingStore()
-    judge = EmbeddingRelevance(threshold=0.45)
+    evaluation_raw = evaluate_with_qa_pairs(raw_text, stored_qa_pairs)
+    if evaluation_raw.get("error"):
+        raise HTTPException(status_code=500, detail=evaluation_raw["error"])
 
-    # 三种策略分段
-    smart_result = segment_text(raw_text, doc_id=doc_id, config=config)
-    smart_chunks = smart_result["chunks"]
-
-    heading_objs = heading_based_segment(
-        raw_text, doc_id=f"{doc_id}_heading",
-        min_chars=config.min_chars, target_chars=config.target_chars,
-        max_chars=config.max_chars,
-    )
-    heading_chunks = [
-        {"chunk_id": c.chunk_id, "content": c.content, "title_path": c.title_path,
-         "chunk_type": c.chunk_type, "char_count": c.char_count,
-         "source_refs": c.source_refs, "quality_flags": c.quality_flags}
-        for c in heading_objs
-    ]
-
-    fixed_objs = fixed_length_segment(raw_text, doc_id=f"{doc_id}_fixed")
-    fixed_chunks = [
-        {"chunk_id": c.chunk_id, "content": c.content, "title_path": c.title_path,
-         "chunk_type": c.chunk_type, "char_count": c.char_count,
-         "source_refs": c.source_refs, "quality_flags": c.quality_flags}
-        for c in fixed_objs
-    ]
-
-    all_strategies = [
-        ("smart", smart_chunks),
-        ("heading", heading_chunks),
-        ("fixed", fixed_chunks),
-    ]
-
-    # 评测查询 — 基于文档内容生成
-    first_content = stored_chunks[0].get("content", "") if stored_chunks else ""
-    test_queries = [
-        "本文档的主要内容是什么？",
-        "文档中提到了哪些关键数据或指标？",
-        "文档的核心结论或要点是什么？",
-    ]
-
-    strategy_results: list[dict] = []
-    for strategy_name, chunks in all_strategies:
-        store.add_chunks(f"{doc_id}_{strategy_name}", chunks)
-
-        metrics_accum: dict[str, list[float]] = {
-            "recall@1": [], "recall@3": [], "recall@5": [],
-            "precision@5": [], "ndcg@5": [], "mrr": [],
-        }
-
-        for query in test_queries:
-            ref_text = chunks[0]["content"][:500] if chunks else query
-            judge.set_reference(ref_text, [])
-            hits = store.search(f"{doc_id}_{strategy_name}", query, top_k=payload.top_k)
-            m = compute_ir_metrics(hits, judge, all_chunks=chunks)
-            for key in metrics_accum:
-                metrics_accum[key].append(m.get(key, 0.0))
-
-        avg_chunk_size = sum(c.get("char_count", 0) for c in chunks) / max(1, len(chunks))
+    strategy_results = []
+    for item in evaluation_raw.get("strategies", []):
         strategy_results.append({
-            "strategy": strategy_name,
-            "chunk_count": len(chunks),
-            "avg_chunk_size": round(avg_chunk_size, 1),
-            "recall_at_1": round(_avg(metrics_accum["recall@1"]), 4),
-            "recall_at_3": round(_avg(metrics_accum["recall@3"]), 4),
-            "recall_at_5": round(_avg(metrics_accum["recall@5"]), 4),
-            "precision_at_5": round(_avg(metrics_accum["precision@5"]), 4),
-            "ndcg_at_5": round(_avg(metrics_accum["ndcg@5"]), 4),
-            "mrr": round(_avg(metrics_accum["mrr"]), 4),
+            "strategy": item.get("strategy", ""),
+            "chunk_count": item.get("chunk_count", 0),
+            "avg_chunk_size": item.get("avg_chunk_size", 0.0),
+            "recall_at_1": round(item.get("recall_at_1", 0.0), 4),
+            "recall_at_3": round(item.get("recall_at_3", 0.0), 4),
+            "recall_at_5": round(item.get("recall_at_5", 0.0), 4),
+            "precision_at_5": round(item.get("precision_at_5", 0.0), 4),
+            "ndcg_at_5": round(item.get("ndcg_at_5", 0.0), 4),
+            "mrr": round(item.get("mrr", 0.0), 4),
         })
 
     return EvaluateResponse(
@@ -489,7 +1043,81 @@ def evaluate_document(payload: EvaluateRequest) -> EvaluateResponse:
         strategies=strategy_results,
     )
 
-
 def safe_doc_id(value: str) -> str:
     safe = "".join(char if char.isalnum() else "_" for char in value.strip())
     return safe.strip("_") or "doc"
+
+
+# ── Benchmark ──────────────────────────────────────────
+
+from backend.app.models.schemas import (
+    BenchmarkDatasetResult,
+    BenchmarkResultsResponse,
+    BenchmarkStrategyResult,
+)
+
+@router.get("/api/evaluate/cached")
+def get_cached_evaluation(doc_id: str = Query(..., min_length=1)) -> dict | None:
+    """Return cached background evaluation result for a document (if ready).
+
+    Returns None with a status message when evaluation is still running.
+    """
+    cached = _eval_cache.get(doc_id.strip())
+    print(f"[EvalCache] GET doc_id={doc_id.strip()}, found={cached is not None}, all_keys={list(_eval_cache.keys())}")
+    if cached:
+        return {"ready": True, "evaluation": cached}
+    return {"ready": False, "evaluation": None}
+
+
+_BENCHMARK_CACHE_FILE = Path(__file__).resolve().parents[3] / "scripts" / "benchmark_results.json"
+
+
+@router.get("/api/evaluate/benchmark/results", response_model=BenchmarkResultsResponse)
+def get_benchmark_results() -> BenchmarkResultsResponse:
+    """读取最近一次 LongBench 评测结果（来自 scripts/benchmark_results.json）。"""
+    import json as _json
+    import re
+
+    if not _BENCHMARK_CACHE_FILE.exists():
+        return BenchmarkResultsResponse(results=[], cached=False)
+
+    try:
+        raw = _BENCHMARK_CACHE_FILE.read_text(encoding="utf-8")
+    except Exception:
+        return BenchmarkResultsResponse(results=[], cached=False)
+
+    # 提取 JSON 数组部分（前面可能有 jieba 等输出）
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not match:
+        return BenchmarkResultsResponse(results=[], cached=False)
+
+    try:
+        data = _json.loads(match.group())
+    except _json.JSONDecodeError:
+        return BenchmarkResultsResponse(results=[], cached=False)
+
+    results: list[BenchmarkDatasetResult] = []
+    for item in data:
+        strategies = [
+            BenchmarkStrategyResult(**s)
+            for s in item.get("strategies", [])
+        ]
+        results.append(BenchmarkDatasetResult(
+            dataset=item.get("dataset", ""),
+            label=item.get("dataset", ""),
+            samples=item.get("samples", 0),
+            processed=item.get("processed", 0),
+            strategies=strategies,
+            structure_gain=item.get("structure_gain", 0.0),
+            semantic_gain=item.get("semantic_gain", 0.0),
+            total_gain=item.get("total_gain", 0.0),
+        ))
+
+    # 获取文件修改时间
+    import os
+    mtime = os.path.getmtime(str(_BENCHMARK_CACHE_FILE))
+    from datetime import datetime
+    last_run = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+    return BenchmarkResultsResponse(results=results, cached=True, last_run=last_run)
+

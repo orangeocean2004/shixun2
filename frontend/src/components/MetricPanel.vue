@@ -6,10 +6,6 @@ const props = defineProps({
     type: Object,
     required: true,
   },
-  strategy: {
-    type: Object,
-    required: true,
-  },
 })
 
 const metricItems = computed(() => {
@@ -60,13 +56,6 @@ function formatPercent(value) {
       </div>
     </div>
 
-    <div class="strategy-block">
-      <div class="strategy-head">
-        <h3>分段策略</h3>
-        <span class="ui-pill">运行参数快照</span>
-      </div>
-      <pre class="ui-code strategy-code">{{ JSON.stringify(props.strategy, null, 2) }}</pre>
-    </div>
   </section>
 </template>
 
@@ -111,28 +100,5 @@ function formatPercent(value) {
   line-height: 1.1;
 }
 
-.strategy-block {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 
-.strategy-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.strategy-head h3 {
-  margin: 0;
-  font-size: 15px;
-}
-
-.strategy-code {
-  max-height: 260px;
-  font-size: 13px;
-  line-height: 1.6;
-}
 </style>

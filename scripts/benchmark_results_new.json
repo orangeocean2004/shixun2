@@ -1,0 +1,247 @@
+
+Evaluating MultiFieldQA ÖÐÎÄ...
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 199/199 [00:00<00:00, 6099.00it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+  [20/200] processed
+  [40/200] processed
+  [60/200] processed
+  [80/200] processed
+  [100/200] processed
+  [120/200] processed
+  [140/200] processed
+  [160/200] processed
+  [180/200] processed
+  [200/200] processed
+Done in 83s (200 samples)
+
+Evaluating DuReader ÖÐÎÄ...
+  [20/200] processed
+  [40/200] processed
+  [60/200] processed
+  [80/200] processed
+  [100/200] processed
+  [120/200] processed
+  [140/200] processed
+  [160/200] processed
+  [180/200] processed
+  [200/200] processed
+Done in 102s (200 samples)
+
+Evaluating MultiFieldQA Ó¢ÎÄ...
+  [20/150] processed
+  [40/150] processed
+  [60/150] processed
+  [80/150] processed
+  [100/150] processed
+  [120/150] processed
+  [140/150] processed
+Done in 133s (150 samples)
+
+Evaluating QASPER ÂÛÎÄQA...
+  [20/200] processed
+  [40/200] processed
+  [60/200] processed
+  [80/200] processed
+  [100/200] processed
+  [120/200] processed
+  [140/200] processed
+  [160/200] processed
+  [180/200] processed
+  [200/200] processed
+Done in 122s (200 samples)
+[
+  {
+    "dataset": "multifieldqa_zh",
+    "samples": 200,
+    "processed": 200,
+    "strategies": [
+      {
+        "strategy": "smart",
+        "label": "Smart (heading+semantic+protect+overlap)",
+        "avg_chunk_count": 9.46,
+        "recall_at_1": 0.11522817460317461,
+        "recall_at_3": 0.23727579365079365,
+        "recall_at_5": 0.29461507936507936,
+        "precision_at_5": 0.1145,
+        "ndcg_at_5": 0.24598681010303303,
+        "mrr": 0.2475,
+        "processed": 200
+      },
+      {
+        "strategy": "heading",
+        "label": "Heading-based (heading+length only)",
+        "avg_chunk_count": 9.435,
+        "recall_at_1": 0.13606150793650795,
+        "recall_at_3": 0.24352579365079363,
+        "recall_at_5": 0.29836507936507933,
+        "precision_at_5": 0.11599999999999999,
+        "ndcg_at_5": 0.2583026320119851,
+        "mrr": 0.2605,
+        "processed": 200
+      },
+      {
+        "strategy": "fixed",
+        "label": "Fixed-length (512-char uniform)",
+        "avg_chunk_count": 10.555,
+        "recall_at_1": 0.14743650793650795,
+        "recall_at_3": 0.27676190476190476,
+        "recall_at_5": 0.32675396825396824,
+        "precision_at_5": 0.12891666666666668,
+        "ndcg_at_5": 0.286896110888285,
+        "mrr": 0.28175,
+        "processed": 200
+      }
+    ],
+    "structure_gain": -8.7,
+    "semantic_gain": -1.3,
+    "total_gain": -9.8,
+    "ndcg_gain": -14.3
+  },
+  {
+    "dataset": "dureader",
+    "samples": 200,
+    "processed": 200,
+    "strategies": [
+      {
+        "strategy": "smart",
+        "label": "Smart (heading+semantic+protect+overlap)",
+        "avg_chunk_count": 20.27,
+        "recall_at_1": 0.314494227994228,
+        "recall_at_3": 0.5774588744588744,
+        "recall_at_5": 0.6675227272727272,
+        "precision_at_5": 0.32,
+        "ndcg_at_5": 0.6316109912303066,
+        "mrr": 0.6313333333333333,
+        "processed": 200
+      },
+      {
+        "strategy": "heading",
+        "label": "Heading-based (heading+length only)",
+        "avg_chunk_count": 20.275,
+        "recall_at_1": 0.314494227994228,
+        "recall_at_3": 0.5791255411255412,
+        "recall_at_5": 0.665439393939394,
+        "precision_at_5": 0.32,
+        "ndcg_at_5": 0.630972662314474,
+        "mrr": 0.6313333333333333,
+        "processed": 200
+      },
+      {
+        "strategy": "fixed",
+        "label": "Fixed-length (512-char uniform)",
+        "avg_chunk_count": 23.355,
+        "recall_at_1": 0.2812184343434343,
+        "recall_at_3": 0.6003160173160174,
+        "recall_at_5": 0.7027409812409812,
+        "precision_at_5": 0.36300000000000004,
+        "ndcg_at_5": 0.6613224330804299,
+        "mrr": 0.6581666666666667,
+        "processed": 200
+      }
+    ],
+    "structure_gain": -5.3,
+    "semantic_gain": 0.3,
+    "total_gain": -5.0,
+    "ndcg_gain": -4.5
+  },
+  {
+    "dataset": "multifieldqa_en",
+    "samples": 150,
+    "processed": 150,
+    "strategies": [
+      {
+        "strategy": "smart",
+        "label": "Smart (heading+semantic+protect+overlap)",
+        "avg_chunk_count": 27.3,
+        "recall_at_1": 0.2461410052910053,
+        "recall_at_3": 0.3709891534391534,
+        "recall_at_5": 0.43553571428571425,
+        "precision_at_5": 0.17866666666666667,
+        "ndcg_at_5": 0.4083678285672857,
+        "mrr": 0.41933333333333334,
+        "processed": 150
+      },
+      {
+        "strategy": "heading",
+        "label": "Heading-based (heading+length only)",
+        "avg_chunk_count": 27.3,
+        "recall_at_1": 0.23058544973544973,
+        "recall_at_3": 0.37479867724867727,
+        "recall_at_5": 0.42831349206349206,
+        "precision_at_5": 0.17600000000000002,
+        "ndcg_at_5": 0.39903510988713503,
+        "mrr": 0.40855555555555556,
+        "processed": 150
+      },
+      {
+        "strategy": "fixed",
+        "label": "Fixed-length (512-char uniform)",
+        "avg_chunk_count": 45.92,
+        "recall_at_1": 0.21508155080213906,
+        "recall_at_3": 0.31498212517330165,
+        "recall_at_5": 0.38389230689617687,
+        "precision_at_5": 0.20666666666666667,
+        "ndcg_at_5": 0.4000973460338017,
+        "mrr": 0.4271111111111111,
+        "processed": 150
+      }
+    ],
+    "structure_gain": 11.6,
+    "semantic_gain": 1.7,
+    "total_gain": 13.5,
+    "ndcg_gain": 2.1
+  },
+  {
+    "dataset": "qasper",
+    "samples": 200,
+    "processed": 200,
+    "strategies": [
+      {
+        "strategy": "smart",
+        "label": "Smart (heading+semantic+protect+overlap)",
+        "avg_chunk_count": 22.525,
+        "recall_at_1": 0.13167870762278658,
+        "recall_at_3": 0.2696596243668612,
+        "recall_at_5": 0.33741918607708077,
+        "precision_at_5": 0.2,
+        "ndcg_at_5": 0.3315390912786827,
+        "mrr": 0.3714166666666667,
+        "processed": 200
+      },
+      {
+        "strategy": "heading",
+        "label": "Heading-based (heading+length only)",
+        "avg_chunk_count": 22.52,
+        "recall_at_1": 0.1459495409561199,
+        "recall_at_3": 0.2534572434144803,
+        "recall_at_5": 0.3390739479818427,
+        "precision_at_5": 0.2,
+        "ndcg_at_5": 0.3355068088684546,
+        "mrr": 0.37,
+        "processed": 200
+      },
+      {
+        "strategy": "fixed",
+        "label": "Fixed-length (512-char uniform)",
+        "avg_chunk_count": 36.595,
+        "recall_at_1": 0.08123542475557093,
+        "recall_at_3": 0.18742922975325524,
+        "recall_at_5": 0.25066861869598,
+        "precision_at_5": 0.196,
+        "ndcg_at_5": 0.28066835717807587,
+        "mrr": 0.3375,
+        "processed": 200
+      }
+    ],
+    "structure_gain": 35.3,
+    "semantic_gain": -0.5,
+    "total_gain": 34.6,
+    "ndcg_gain": 18.1
+  }
+]

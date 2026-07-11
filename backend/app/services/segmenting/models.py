@@ -15,7 +15,7 @@ class SegmentConfig:
     min_chars: int = 180
     target_chars: int = 550
     max_chars: int = 800
-    overlap_sentences: int = 1
+    overlap_sentences: int = 2
     heading_flush_min_chars: int = 240
     min_tokens: int = 100
     target_tokens: int = 900
@@ -23,8 +23,10 @@ class SegmentConfig:
     include_heading_in_content: bool = True
     enable_semantic_boundary: bool = True
     semantic_boundary_threshold: float = 0.55
-    keyword_strategy: str = "jieba_tfidf"
+    enable_parent_child: bool = False
+    parent_target_chars: int = 1200
     recursive_separators: tuple[str, ...] = (
+        # 只保留真正的段落和句子边界 — 绝不在逗号/冒号/空格处破句
         "\n\n",
         "\n",
         "。",
@@ -33,43 +35,87 @@ class SegmentConfig:
         "；",
         ";",
         ". ",
+        "! ",
+        "? ",
         ".",
-        "，",
-        "、",
-        ",",
-        ":",
+        "!",
+        "?",
         "：",
-        " ",
-        "",
+        ":",
+        "…",
+        "…",
+        "—",
+        "～",
+        "~",
+        ")",
+        "）",
+        "]",
+        "}",
     )
 
     @classmethod
     def auto(cls, total_chars: int) -> "SegmentConfig":
         """根据文档总长度自动确定最优分段参数。
 
-        短文档用小 chunk 保证检索精度，长文档用大 chunk 避免过度碎片化。
+        短文档用小 chunk 保证检索精度，长文档用较大 chunk 避免过度碎片化。
+        语义边界默认关闭 — 对于中英文混合场景，结构感知（heading）
+        已足够；语义边界仅在中文干净文档上有正向收益。
         """
         if total_chars <= 0:
             return cls()
 
-        # 按文档长度分档
+        # 按文档长度分档 — 大于固定长度基线，靠结构化边界差异化
+        # max_chars 放宽到 3x target，适应 heading 块（短）与大段内容（长）的自然差异
         if total_chars < 3_000:
-            target = 300
+            target = 350
+            min_c = 50
         elif total_chars < 10_000:
-            target = 450
+            target = 600
+            min_c = 60
         elif total_chars < 50_000:
-            target = 650
+            target = 700
+            min_c = 80
         elif total_chars < 200_000:
-            target = 850
+            target = 800
+            min_c = 120
         else:
-            target = 1100
+            target = 900
+            min_c = 200
 
         return cls(
-            min_chars=max(120, target // 2),
+            min_chars=min_c,
             target_chars=target,
-            max_chars=target * 2,
-            heading_flush_min_chars=max(120, target // 3),
-            overlap_sentences=1,
+            max_chars=target * 3,
+            heading_flush_min_chars=min_c,
+            overlap_sentences=0,                     # 默认关闭 — 稀释检索精度
+            enable_semantic_boundary=False,           # 默认关闭 — 仅中文有帮助
+            semantic_boundary_threshold=0.65,
+        )
+
+    @classmethod
+    def for_preset(cls, preset: str) -> "SegmentConfig":
+        """根据下游场景返回预设分段参数。
+
+        预设：
+        - "rag":       RAG 检索优化 — 短 chunk（450字）+ 2句重叠，精准命中优先
+        - "training":  训练语料生产 — 长 chunk（1000字）+ 无重叠，语义完整优先
+        - "summary":   文档摘要 — 按章节分段（2000字），结构完整优先
+        """
+        presets = {
+            "rag": {"target": 450, "min": 180, "max": 800, "overlap": 2},
+            "training": {"target": 1000, "min": 500, "max": 2000, "overlap": 0},
+            "summary": {"target": 2000, "min": 500, "max": 4000, "overlap": 0},
+        }
+        p = presets.get(preset)
+        if p is None:
+            raise ValueError(f"未知预设 '{preset}'，可选：{', '.join(presets)}")
+
+        return cls(
+            min_chars=p["min"],
+            target_chars=p["target"],
+            max_chars=p["max"],
+            overlap_sentences=p["overlap"],
+            heading_flush_min_chars=max(120, p["target"] // 3),
             enable_semantic_boundary=True,
             semantic_boundary_threshold=0.55,
         )
@@ -107,7 +153,8 @@ class Chunk:
     entity_tags: list[str] = field(default_factory=list)
     backlink: dict[str, Any] = field(default_factory=dict)
     section_titles: list[str] = field(default_factory=list)
-    retrieval_text: str = ""
+    parent_chunk_id: str = ""
+    child_chunk_ids: list[str] = field(default_factory=list)
 
 
 CandidateChunk = dict[str, Any]

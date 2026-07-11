@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .enrichment import build_backlink, build_label, build_summary, extract_entity_tags
-from .keyword_extraction import get_keyword_strategy
+from .enrichment import build_backlink, build_summary, extract_entity_tags
 from .models import CandidateChunk, Chunk, DocumentBlock, SegmentConfig
 from .parser import parse_plain_text
-from .splitter import build_candidate_chunks, merge_short_chunks, split_oversized_chunks
+from .splitter import apply_overlap_between_chunks, build_candidate_chunks, fix_sentence_boundary_endings, merge_short_chunks, split_oversized_chunks
 from .statistics import build_statistics, chunk_to_dict
 
 
@@ -48,7 +47,9 @@ def segment_blocks(
     candidate_chunks = build_candidate_chunks(blocks, config)
     normalized_chunks = split_oversized_chunks(candidate_chunks, config)
     merged_chunks = merge_short_chunks(normalized_chunks, config)
-    chunks = finalize_chunks(merged_chunks, doc_id, config)
+    boundary_fixed_chunks = fix_sentence_boundary_endings(merged_chunks, config)
+    overlapped_chunks = apply_overlap_between_chunks(boundary_fixed_chunks, config)
+    chunks = finalize_chunks(overlapped_chunks, doc_id, config)
 
     return {
         "doc_id": doc_id,
@@ -67,8 +68,6 @@ def segment_blocks(
             "include_heading_in_content": config.include_heading_in_content,
             "enable_semantic_boundary": config.enable_semantic_boundary,
             "semantic_boundary_threshold": config.semantic_boundary_threshold,
-            "keyword_strategy": config.keyword_strategy,
-            "keyword_tokenizer": "jieba",
             "recursive_separators": list(config.recursive_separators),
         },
     }
@@ -85,7 +84,6 @@ def finalize_chunks(
     """
 
     chunks: list[Chunk] = []
-    keyword_strategy = get_keyword_strategy(config.keyword_strategy)
 
     for index, candidate in enumerate(candidates, start=1):
         chunk_id = f"{doc_id}_chunk_{index:04d}"
@@ -108,8 +106,7 @@ def finalize_chunks(
             quality_flags.append("contains_image")
 
         strategy_info = dict(candidate["strategy_info"])
-        strategy_info["enrichment"] = "deterministic_v1"
-        strategy_info["keyword_strategy"] = config.keyword_strategy
+        strategy_info["enrichment"] = "extractive_v1"
         section_titles = list(candidate.get("section_titles", []))
         retrieval_text = build_retrieval_text(candidate)
 
@@ -123,12 +120,7 @@ def finalize_chunks(
                 source_refs=source_refs,
                 strategy_info=strategy_info,
                 quality_flags=quality_flags,
-                label=build_label(
-                    candidate["title_path"],
-                    candidate["chunk_type"],
-                    content,
-                    keyword_strategy=keyword_strategy,
-                ),
+                label=[],  # tags provided by ContentOrganizer via LLM
                 summary=build_summary(content),
                 entity_tags=extract_entity_tags(content),
                 backlink=build_backlink(doc_id, chunk_id, source_refs),
@@ -141,7 +133,11 @@ def finalize_chunks(
 
 
 def build_retrieval_text(candidate: CandidateChunk) -> str:
-    """构造专供检索使用的增强文本，不改变原文 content。"""
+    """构造专供检索使用的增强文本，不改变原文 content。
+
+    把 chunk 的标题路径、小节、关键指标、标签、摘要、实体等信息
+    全部注入检索文本中，让向量嵌入更好地捕捉 chunk 的语义定位。
+    """
 
     parts: list[str] = []
     title_path = candidate.get("title_path") or []
@@ -156,9 +152,15 @@ def build_retrieval_text(candidate: CandidateChunk) -> str:
         parts.append("关键指标: " + "；".join(str(item) for item in metric_keywords if str(item).strip()))
     if candidate.get("chunk_type") == "metric":
         parts.append("内容类型: 技术指标 验收标准 评价指标 百分比 阈值")
+    entity_tags = candidate.get("entity_tags") or []
+    if entity_tags:
+        parts.append("实体: " + "，".join(str(item) for item in entity_tags if str(item).strip()))
     label = candidate.get("label") or []
     if label:
         parts.append("标签: " + "，".join(str(item) for item in label if str(item).strip()))
+    summary = (candidate.get("summary") or "").strip()
+    if summary:
+        parts.append("摘要: " + summary[:300])
     parts.append(str(candidate.get("content", "")))
     return "\n".join(part for part in parts if part.strip()).strip()
 

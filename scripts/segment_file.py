@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from backend.app.services.document_loader import load_document
 from backend.app.services.preprocessing import preprocess_document_blocks
-from backend.app.services.segmenting import SegmentConfig, segment_blocks
+from backend.app.services.segmenting import SegmentConfig, segment_blocks, segment_parent_child
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,6 +31,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-chars", type=int, default=None, help="Maximum chunk size. Auto-detected from doc length if not set.")
     parser.add_argument("--overlap-sentences", type=int, default=1, help="Sentence overlap when splitting long chunks.")
     parser.add_argument(
+        "--preset",
+        choices=["rag", "training", "summary"],
+        default=None,
+        help="Use a preset segmentation strategy (rag/training/summary). Overrides --*-chars.",
+    )
+    parser.add_argument(
+        "--parent-child",
+        action="store_true",
+        help="Enable parent-child multi-granularity segmentation.",
+    )
+    parser.add_argument(
         "--clean-document",
         action="store_true",
         help="Remove cover/table-of-contents noise and flatten body-like tables before segmenting.",
@@ -44,15 +55,24 @@ def main() -> None:
     output_path = Path(args.output) if args.output else default_output_path(input_path)
     doc_id = args.doc_id or safe_doc_id(input_path.stem)
 
-    # 仅当用户显式指定参数时才构建自定义 config，否则传 None 触发自适应
+    # Build config: preset > explicit params > auto
     config = None
-    if args.min_chars is not None or args.target_chars is not None or args.max_chars is not None:
+    if args.preset:
+        config = SegmentConfig.for_preset(args.preset)
+        if args.overlap_sentences != 1:
+            config.overlap_sentences = args.overlap_sentences
+    elif args.min_chars is not None or args.target_chars is not None or args.max_chars is not None:
         config = SegmentConfig(
             min_chars=args.min_chars or 300,
             target_chars=args.target_chars or 900,
             max_chars=args.max_chars or 1200,
             overlap_sentences=args.overlap_sentences,
         )
+
+    if args.parent_child:
+        if config is None:
+            config = SegmentConfig()
+        config.enable_parent_child = True
 
     blocks = load_document(input_path)
     preprocess_report = None
@@ -71,7 +91,11 @@ def main() -> None:
     print(f"Loaded blocks: {len(blocks)}")
     if preprocess_report is not None:
         print(f"Preprocessing: {preprocess_report.to_dict()}")
-    print(f"Generated chunks: {result['statistics']['chunk_count']}")
+    stats = result.get("statistics", {})
+    print(f"Generated chunks: {stats.get('chunk_count', len(result.get('chunks', [])))}")
+    if "parent_count" in stats:
+        print(f"  Parents: {stats['parent_count']}, Children: {stats['child_count']}")
+        print(f"  Avg children/parent: {stats.get('avg_children_per_parent', '--')}")
     print(f"Output written: {output_path}")
 
 

@@ -1,9 +1,17 @@
+"""Chunk enrichment utilities.
+
+- build_summary: extractive lead-N sentence summary (lightweight fallback).
+- extract_entity_tags: regex-based entity extraction (dates, versions, orgs, etc.).
+- build_backlink: construct source-reference backlinks for traceability.
+
+Note: LLM-based tagging and summarisation are handled by
+``ContentOrganizer`` in ``backend.app.services.organizer``.
+"""
+
 from __future__ import annotations
 
 import re
 from typing import Any
-
-from .keyword_extraction import KeywordExtractionStrategy, get_keyword_strategy
 
 
 SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[。！？!?；;])")
@@ -29,30 +37,15 @@ TECH_TERMS = {
 }
 
 
-def build_label(
-    title_path: list[str],
-    chunk_type: str,
-    content: str,
-    keyword_strategy: KeywordExtractionStrategy | None = None,
-) -> list[str]:
-    title_text = " ".join(part.strip() for part in title_path if part and part.strip())
-    title_keywords = _top_keywords(title_text, top_k=2, keyword_strategy=keyword_strategy)
-    content_keywords = _top_keywords(content, top_k=4, keyword_strategy=keyword_strategy)
-
-    labels = _dedupe_keep_order([*title_keywords, *content_keywords])
-    if labels:
-        return labels[:4]
-    return [chunk_type]
-
-
-def build_summary(content: str, max_chars: int = 120) -> str:
+def build_summary(content: str, max_chars: int = 200) -> str:
+    """Extractive lead-N summary — truncate to first few complete sentences."""
     cleaned = _normalize(content)
     if not cleaned:
         return ""
 
     sentences = [s.strip() for s in SENTENCE_SPLIT_PATTERN.split(cleaned) if s.strip()]
     if not sentences:
-        return cleaned[:max_chars]
+        return _soft_truncate(cleaned, max_chars)
 
     selected: list[str] = []
     current_len = 0
@@ -64,14 +57,14 @@ def build_summary(content: str, max_chars: int = 120) -> str:
             selected.append(sentence)
             current_len = next_len
         else:
-            selected.append(sentence[: max_chars - current_len])
             break
 
     summary = "".join(selected).strip()
-    return summary[:max_chars]
+    return _soft_truncate(summary, max_chars)
 
 
 def extract_entity_tags(content: str, max_tags: int = 10) -> list[str]:
+    """Regex-based entity extraction: dates, versions, quoted terms, org names."""
     text = _normalize(content)
     if not text:
         return []
@@ -92,6 +85,7 @@ def extract_entity_tags(content: str, max_tags: int = 10) -> list[str]:
 
 
 def build_backlink(doc_id: str, chunk_id: str, source_refs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Construct a source-reference backlink for traceability."""
     ref_ids = _dedupe_keep_order([
         str(ref.get("block_id"))
         for ref in source_refs
@@ -117,13 +111,22 @@ def build_backlink(doc_id: str, chunk_id: str, source_refs: list[dict[str, Any]]
     }
 
 
-def _top_keywords(
-    content: str,
-    top_k: int = 3,
-    keyword_strategy: KeywordExtractionStrategy | None = None,
-) -> list[str]:
-    strategy = keyword_strategy or get_keyword_strategy()
-    return strategy.extract(content, top_k=top_k)
+# ── helpers ─────────────────────────────────────────────────
+
+
+def _soft_truncate(text: str, max_chars: int) -> str:
+    """Truncate to *max_chars*, back-tracking to the last sentence boundary."""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+
+    window = text[:max_chars]
+    for ch in ("。", "！", "？", "；", ".", "!", "?", ";"):
+        idx = window.rfind(ch)
+        if idx > max_chars * 0.4:
+            return text[:idx + 1]
+
+    return text[:max_chars] + "…"
 
 
 def _extract_quoted_terms(text: str) -> list[str]:
