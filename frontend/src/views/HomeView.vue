@@ -20,6 +20,7 @@ const resultChunkListRef = ref(null)
 const qaChunkListRef = ref(null)
 const qaQuestion = ref('')
 const qaDocId = ref('')
+const qaSearchScope = ref('current')
 const qaLoading = ref(false)
 const qaError = ref('')
 const qaRetrievedChunks = ref([])
@@ -28,6 +29,7 @@ const qaSynthesizing = ref(false)
 const qaPairs = ref([])
 const qaSynthError = ref('')
 const qaSaveMode = ref('replace')
+const qaGenerateCount = ref(10)
 const qaSavedCount = ref(null)
 const qaMatched = ref(null)
 const qaAnswerCovered = ref(null)
@@ -147,7 +149,10 @@ async function runQuery() {
   try {
     const response = await queryRetrievedChunks({
       question,
-      docId: qaDocId.value || state.result?.doc_id || '',
+      docId:
+        qaSearchScope.value === 'current'
+          ? qaDocId.value || state.result?.doc_id || ''
+          : '',
     })
     qaDocId.value = response.doc_id || qaDocId.value
     qaRetrievedChunks.value = response.chunks || []
@@ -175,6 +180,7 @@ async function synthesizeQA() {
         chunks: state.result.chunks,
         doc_id: state.result?.doc_id || '',
         save_mode: qaSaveMode.value,
+        qa_count: qaGenerateCount.value,
       }),
     })
     qaPairs.value = data.qa_pairs || []
@@ -309,6 +315,24 @@ function handleSubmit(payload) {
       </div>
 
       <div class="qa-form">
+        <div class="qa-scope-toggle" role="group" aria-label="检索范围">
+          <button
+            type="button"
+            class="qa-scope-option"
+            :class="{ active: qaSearchScope === 'current' }"
+            @click="qaSearchScope = 'current'"
+          >
+            仅本次文档
+          </button>
+          <button
+            type="button"
+            class="qa-scope-option"
+            :class="{ active: qaSearchScope === 'all' }"
+            @click="qaSearchScope = 'all'"
+          >
+            历史全部文档
+          </button>
+        </div>
         <input
           class="ui-input"
           v-model="qaQuestion"
@@ -368,23 +392,37 @@ function handleSubmit(payload) {
           <p class="panel-subtitle">基于当前文档分块自动生成问答对，用于快速抽检质量。</p>
         </div>
         <div class="qa-synth-actions">
-          <div class="qa-save-toggle" role="group" aria-label="QA 保存方式">
-            <button
-              type="button"
-              class="qa-save-option"
-              :class="{ active: qaSaveMode === 'replace' }"
-              @click="qaSaveMode = 'replace'"
-            >
-              覆盖
-            </button>
-            <button
-              type="button"
-              class="qa-save-option"
-              :class="{ active: qaSaveMode === 'append' }"
-              @click="qaSaveMode = 'append'"
-            >
-              追加
-            </button>
+          <div class="qa-count-control">
+            <span class="qa-count-label">生成个数 <span class="ui-tip" tabindex="0" data-tip="本次最多生成多少个 QA 对。">ⓘ</span></span>
+            <input
+              class="ui-input qa-count-input"
+              v-model.number="qaGenerateCount"
+              type="number"
+              min="1"
+              max="100"
+              step="1"
+            />
+          </div>
+          <div class="qa-save-toggle-wrap">
+            <span class="qa-save-label">保存方式 <span class="ui-tip" tabindex="0" data-tip="覆盖：先清空该文档已有 QA 对再保存；追加：保留已有 QA 对并在后面新增。">ⓘ</span></span>
+            <div class="qa-save-toggle" role="group" aria-label="QA 保存方式">
+              <button
+                type="button"
+                class="qa-save-option"
+                :class="{ active: qaSaveMode === 'replace' }"
+                @click="qaSaveMode = 'replace'"
+              >
+                覆盖
+              </button>
+              <button
+                type="button"
+                class="qa-save-option"
+                :class="{ active: qaSaveMode === 'append' }"
+                @click="qaSaveMode = 'append'"
+              >
+                追加
+              </button>
+            </div>
           </div>
           <button
             type="button"
@@ -472,11 +510,91 @@ function handleSubmit(payload) {
   flex-wrap: wrap;
 }
 
+.qa-count-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qa-count-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.qa-save-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.ui-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: help;
+}
+
+.ui-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: 220px;
+  max-width: 340px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: rgba(18, 22, 30, 0.96);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.ui-tip:hover::after,
+.ui-tip:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+.qa-count-input {
+  width: 88px;
+}
+
+.qa-count-input::-webkit-outer-spin-button,
+.qa-count-input::-webkit-inner-spin-button {
+  opacity: 1;
+}
+
+
 .qa-synth-actions {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+
+.qa-save-toggle-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .qa-save-toggle {
@@ -636,9 +754,32 @@ function handleSubmit(payload) {
   line-height: 1.6;
 }
 
+.qa-scope-toggle {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.qa-scope-option {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 9px 13px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.qa-scope-option.active {
+  color: #ffffff;
+  background: rgba(var(--accent-rgb), 0.18);
+}
+
 .qa-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
 }
 

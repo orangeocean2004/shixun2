@@ -44,7 +44,7 @@ from backend.app.services.rag_store.service import (
 router = APIRouter()
 
 
-def _generate_qa_fallback(chunks: list[dict]) -> list[dict]:
+def _generate_qa_fallback(chunks: list[dict], max_pairs: int = 10) -> list[dict]:
     """Generate simple QA pairs from chunk content without LLM.
 
     Extracts first key sentence from each chunk as the answer and creates a
@@ -55,7 +55,7 @@ def _generate_qa_fallback(chunks: list[dict]) -> list[dict]:
     qa_pairs = []
     sentence_pat = _re.compile(r"[^。！？.!?\n]+[。！？.!?]")
 
-    for chunk in chunks[:12]:
+    for chunk in chunks[:max(max_pairs, 1) + 2]:
         content = (chunk.get("content") or "").strip()
         if not content:
             continue
@@ -95,7 +95,7 @@ def _generate_qa_fallback(chunks: list[dict]) -> list[dict]:
             "chunk_id": chunk.get("chunk_id", ""),
         })
 
-        if len(qa_pairs) >= 10:
+        if len(qa_pairs) >= max(max_pairs, 1):
             break
 
     return qa_pairs
@@ -400,13 +400,19 @@ def health() -> dict[str, str]:
 
 @router.get("/api/settings/model", response_model=ModelSettingsResponse)
 def get_model_settings_api() -> ModelSettingsResponse:
-    return ModelSettingsResponse(**get_model_settings())
+    try:
+        return ModelSettingsResponse(**get_model_settings())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"获取模型设置失败：{exc}") from exc
 
 
 @router.put("/api/settings/model", response_model=ModelSettingsResponse)
 def update_model_settings_api(payload: ModelSettingsPayload) -> ModelSettingsResponse:
-    saved = update_model_settings(payload.model_dump(exclude_unset=True, exclude_none=True))
-    return ModelSettingsResponse(**saved)
+    try:
+        saved = update_model_settings(payload.model_dump(exclude_unset=True, exclude_none=True))
+        return ModelSettingsResponse(**saved)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"保存模型设置失败：{exc}") from exc
 
 
 @router.post("/api/segment/upload", response_model=SegmentUploadResponse)
@@ -491,8 +497,8 @@ async def upload_and_segment(
                     all_chunks.extend(sr["chunks"])
                     total_chars += sum(int(c.get("char_count", 0)) for c in sr["chunks"])
                     total_segmented += 1
-                except Exception:
-                    pass
+                except Exception as exc:
+                    raise HTTPException(status_code=500, detail=f"LongBench 样本分段失败（doc_id={sid}）: {exc}") from exc
 
             # ── Aggregate statistics across all samples ────────
             agg_statistics = dict(seg_result.get("statistics", {}))
@@ -686,8 +692,8 @@ def query_retrieved_chunks(payload: QueryRequest) -> QueryResponse:
                         chunk_id=match.get("chunk_id", ""),
                         similarity=match.get("similarity", 0.0),
                     )
-            except ImportError:
-                pass
+            except ImportError as exc:
+                raise HTTPException(status_code=500, detail=f"加载 QA 存储模块失败：{exc}") from exc
 
         # ── Step 2: Retrieve chunks (always needed for context) ──
         retrieve_kwargs = {"question": payload.question, "top_k": top_k}
@@ -731,8 +737,8 @@ def query_retrieved_chunks(payload: QueryRequest) -> QueryResponse:
                         temperature=0.3,
                         max_tokens=512,
                     ).strip()
-            except Exception:
-                pass  # LLM 生成失败不影响检索结果返回
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"LLM 生成答案失败：{exc}") from exc
 
         return QueryResponse(
             question=payload.question,
@@ -794,6 +800,15 @@ def synthesize_qa(payload: dict = Body(...)):
     if not chunks:
         raise HTTPException(status_code=400, detail="chunks 不能为空")
 
+    try:
+        qa_count = int(payload.get("qa_count") or 10)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="qa_count 必须是整数")
+    if qa_count <= 0:
+        raise HTTPException(status_code=400, detail="qa_count 必须大于 0")
+    if qa_count > 100:
+        raise HTTPException(status_code=400, detail="qa_count 不能超过 100")
+
     settings = get_model_settings()
     llm = LLMClient(
         api_key=settings["OPENAI_API_KEY"],
@@ -804,7 +819,7 @@ def synthesize_qa(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="请先在设置页配置 OPENAI_API_KEY")
 
     evaluator_name = settings.get("QA_QUALITY_EVALUATOR")
-    evaluator = get_qa_quality_evaluator(evaluator_name)
+    evaluator = get_qa_quality_evaluator(evaluator_name, llm)
 
     _system = (
         "你是问答对生成器。根据文档片段生成1-2个问答对。"
@@ -871,9 +886,15 @@ def synthesize_qa(payload: dict = Body(...)):
                 "faithful_score": quality.faithful_score,
                 "quality_score": quality.quality_score,
             })
+            if len(qa_pairs) >= qa_count:
+                break
+
+        if len(qa_pairs) >= qa_count:
+            break
+
 
     if not qa_pairs:
-        qa_pairs = _prepare_qa_pairs_for_storage(_generate_qa_fallback(chunks), "fallback")
+        qa_pairs = _prepare_qa_pairs_for_storage(_generate_qa_fallback(chunks, max_pairs=qa_count), "fallback")
 
     saved = 0
     evaluation_raw = None

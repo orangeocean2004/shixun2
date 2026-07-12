@@ -84,7 +84,7 @@ onMounted(() => {
 
       <form class="settings-form" @submit.prevent="saveSettings">
         <label class="ui-field">
-          <span class="ui-field-title">API Key</span>
+          <span class="ui-field-title">API Key <span class="ui-tip" tabindex="0" data-tip="调用模型服务使用的密钥。留空会导致依赖 LLM 的功能不可用。">ⓘ</span></span>
           <span class="ui-field-help">OPENAI_API_KEY</span>
           <input
             class="ui-input"
@@ -96,7 +96,7 @@ onMounted(() => {
         </label>
 
         <label class="ui-field">
-          <span class="ui-field-title">模型服务地址</span>
+          <span class="ui-field-title">模型服务地址 <span class="ui-tip" tabindex="0" data-tip="OpenAI 兼容接口的基础地址。">ⓘ</span></span>
           <span class="ui-field-help">OPENAI_BASE_URL</span>
           <input
             class="ui-input"
@@ -107,7 +107,7 @@ onMounted(() => {
         </label>
 
         <label class="ui-field">
-          <span class="ui-field-title">模型名称</span>
+          <span class="ui-field-title">模型名称 <span class="ui-tip" tabindex="0" data-tip="调用的模型名称，例如 deepseek-chat。">ⓘ</span></span>
           <span class="ui-field-help">LLM_MODEL</span>
           <input
             class="ui-input"
@@ -131,6 +131,51 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.ui-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: help;
+}
+
+.ui-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: 200px;
+  max-width: 320px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: rgba(18, 22, 30, 0.96);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.ui-tip:hover::after,
+.ui-tip:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
 .settings-layout {
   display: flex;
   flex-direction: column;

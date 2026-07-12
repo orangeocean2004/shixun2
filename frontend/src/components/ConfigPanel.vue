@@ -53,13 +53,13 @@ function onSubmit() {
     <div class="config-section">
       <div class="config-grid config-grid--primary">
         <label class="ui-field config-field">
-          <span class="ui-field-title">文档文件</span>
+          <span class="ui-field-title">文档文件 <span class="ui-tip" tabindex="0" data-tip="选择要进行分段处理的文档文件。">ⓘ</span></span>
           <input class="ui-input" type="file" @change="onFileChange" :disabled="props.loading" />
           <span class="ui-field-help">支持 .pdf .txt .md .docx .jsonl 格式</span>
         </label>
 
         <label class="ui-field config-field">
-          <span class="ui-field-title">文档标识</span>
+          <span class="ui-field-title">文档标识 <span class="ui-tip" tabindex="0" data-tip="文档唯一标识；留空时默认使用文件名生成。">ⓘ</span></span>
           <input class="ui-input" v-model="form.docId" type="text" placeholder="默认使用文件名" :disabled="props.loading" />
           <span class="ui-field-help">可选，用于覆盖默认生成的 doc_id。</span>
         </label>
@@ -69,7 +69,7 @@ function onSubmit() {
     <div class="config-section config-section--secondary">
       <div class="section-heading">
         <div class="section-heading-row">
-          <h3>分段参数</h3>
+          <h3>分段参数 <span class="ui-tip" tabindex="0" data-tip="自动适配会按文档长度选择分段参数；关闭后使用手动参数。">ⓘ</span></h3>
           <label class="toggle-label">
             <input type="checkbox" v-model="autoMode" :disabled="props.loading" />
             <span class="toggle-track">
@@ -107,22 +107,22 @@ function onSubmit() {
 
       <div v-else class="config-grid config-grid--metrics">
         <label class="ui-field config-field">
-          <span class="ui-field-title">最小长度</span>
+          <span class="ui-field-title">最小长度 <span class="ui-tip" tabindex="0" data-tip="分段后每个 chunk 的最小字符数下限。">ⓘ</span></span>
           <span class="ui-field-help">min_chars</span>
           <input class="ui-input" v-model.number="form.minChars" type="number" min="1" :disabled="props.loading" />
         </label>
         <label class="ui-field config-field">
-          <span class="ui-field-title">目标长度</span>
+          <span class="ui-field-title">目标长度 <span class="ui-tip" tabindex="0" data-tip="分段期望字符数，算法会尽量贴近该值。">ⓘ</span></span>
           <span class="ui-field-help">target_chars</span>
           <input class="ui-input" v-model.number="form.targetChars" type="number" min="1" :disabled="props.loading" />
         </label>
         <label class="ui-field config-field">
-          <span class="ui-field-title">最大长度</span>
+          <span class="ui-field-title">最大长度 <span class="ui-tip" tabindex="0" data-tip="分段后每个 chunk 的最大字符数上限。">ⓘ</span></span>
           <span class="ui-field-help">max_chars</span>
           <input class="ui-input" v-model.number="form.maxChars" type="number" min="1" :disabled="props.loading" />
         </label>
         <label class="ui-field config-field">
-          <span class="ui-field-title">重叠句数</span>
+          <span class="ui-field-title">重叠句数 <span class="ui-tip" tabindex="0" data-tip="相邻 chunk 保留的重叠句子数，用于减少上下文断裂。">ⓘ</span></span>
           <span class="ui-field-help">overlap_sentences</span>
           <input class="ui-input" v-model.number="form.overlapSentences" type="number" min="0" :disabled="props.loading" />
         </label>
@@ -278,6 +278,51 @@ function onSubmit() {
 .tier-value {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.ui-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: help;
+}
+
+.ui-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: 200px;
+  max-width: 320px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: rgba(18, 22, 30, 0.96);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.ui-tip:hover::after,
+.ui-tip:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
 }
 
 .config-grid {
