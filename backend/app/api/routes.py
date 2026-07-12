@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Query, UploadFile
+from torch.distributed._shard.sharded_tensor import logger
 
 from backend.app.core.config import (
     ALLOWED_UPLOAD_SUFFIXES,
@@ -788,7 +789,7 @@ def synthesize_qa(payload: dict = Body(...)):
     chunks = payload.get("chunks", [])
     doc_id = (payload.get("doc_id") or "").strip()
     save_mode = payload.get("save_mode") or "replace"
-    if save_mode not in {"replace", "append"}:
+    if save_mode not in ["replace", "append"]:
         raise HTTPException(status_code=400, detail="save_mode 只能是 replace 或 append")
     if not chunks:
         raise HTTPException(status_code=400, detail="chunks 不能为空")

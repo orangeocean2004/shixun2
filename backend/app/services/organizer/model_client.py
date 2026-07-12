@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.app.main import logger
+
 
 class LLMClient:
     """Thin wrapper around langchain-openai ChatOpenAI.
@@ -64,5 +66,6 @@ class LLMClient:
             messages.append(("user", prompt))
             response = llm.invoke(messages)
             return response.content if hasattr(response, "content") else str(response)
-        except Exception:
+        except Exception as e:
+            logger.error(f"[LLMClient] generate failed: {e}")
             return ""
