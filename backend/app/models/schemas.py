@@ -57,6 +57,7 @@ class SegmentUploadResponse(BaseModel):
     file_name: str
     file_size: int
     block_count: int
+    total_chars: int = 0
     chunks: list[dict[str, Any]]
     statistics: dict[str, Any]
     strategy: dict[str, Any]

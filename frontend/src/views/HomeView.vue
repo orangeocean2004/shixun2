@@ -266,7 +266,7 @@ function handleSubmit(payload) {
     </section>
 
     <section v-if="activeTab === 'result'" class="result-tab">
-      <ConfigPanel :loading="state.loading" @submit="handleSubmit" />
+      <ConfigPanel :loading="state.loading" :total-chars="state.result?.total_chars || 0" @submit="handleSubmit" />
       <p v-if="state.loading" class="ui-status ui-status--loading">正在处理文档，请稍候...</p>
       <p v-if="state.error" class="ui-status ui-status--error">{{ state.error }}</p>
 

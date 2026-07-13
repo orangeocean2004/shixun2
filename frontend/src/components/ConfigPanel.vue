@@ -1,10 +1,14 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 
 const props = defineProps({
   loading: {
     type: Boolean,
     default: false,
+  },
+  totalChars: {
+    type: Number,
+    default: 0,
   },
 })
 
@@ -12,6 +16,19 @@ const emit = defineEmits(['submit'])
 
 const file = ref(null)
 const autoMode = ref(true)
+
+// 根据文档长度判断 auto 档位
+const activeTier = computed(() => {
+  const n = props.totalChars || 0
+  if (!n) return null
+  if (n < 3000) return 0
+  if (n < 10000) return 1
+  if (n < 50000) return 2
+  return 3
+})
+
+const tierLabels = ['小块 · 350字', '中块 · 600字', '大块 · 700字', '超大块 · 800~900字']
+const tierRanges = ['< 3K', '3K~10K', '10K~50K', '> 50K']
 
 const form = reactive({
   docId: '',
@@ -86,22 +103,15 @@ function onSubmit() {
         </p>
       </div>
 
+      <p v-if="autoMode && props.totalChars > 0" class="auto-active-info">
+        文档 {{ props.totalChars.toLocaleString() }} 字符 → 自动选用 <strong>{{ tierLabels[activeTier] }}目标</strong>
+      </p>
+
       <div v-if="autoMode" class="auto-tiers">
-        <div class="tier-card">
-          <span class="tier-range">&lt; 3K 字符</span>
-          <span class="tier-value">小块 · 350 字目标</span>
-        </div>
-        <div class="tier-card">
-          <span class="tier-range">3K ~ 10K</span>
-          <span class="tier-value">中块 · 600 字目标</span>
-        </div>
-        <div class="tier-card">
-          <span class="tier-range">10K ~ 50K</span>
-          <span class="tier-value">大块 · 700 字目标</span>
-        </div>
-        <div class="tier-card">
-          <span class="tier-range">&gt; 50K 字符</span>
-          <span class="tier-value">超大块 · 800~900 字目标</span>
+        <div v-for="(range, i) in tierRanges" :key="i"
+             :class="['tier-card', { 'tier-card--active': activeTier === i }]">
+          <span class="tier-range">{{ range }} 字符</span>
+          <span class="tier-value">{{ tierLabels[i] }} 目标</span>
         </div>
       </div>
 
@@ -278,6 +288,30 @@ function onSubmit() {
 .tier-value {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.tier-card--active {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.tier-card--active .tier-value {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.auto-active-info {
+  font-size: 13px;
+  color: var(--text-primary);
+  background: rgba(var(--accent-rgb, 49, 130, 206), 0.06);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.auto-active-info strong {
+  color: var(--accent);
 }
 
 .ui-tip {

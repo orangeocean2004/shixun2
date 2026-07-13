@@ -597,6 +597,7 @@ async def upload_and_segment(
             file_name=result["file_name"],
             file_size=result["file_size"],
             block_count=result["block_count"],
+            total_chars=result.get("total_chars", 0),
             chunks=result["chunks"],
             statistics=result["statistics"],
             strategy=result["strategy"],

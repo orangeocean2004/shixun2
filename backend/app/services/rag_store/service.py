@@ -74,16 +74,21 @@ def ingest_document(
         raise RAGDocumentBusyError("该 doc_id 正在处理中，请稍后重试")
 
     if existing_doc and existing_doc["status"] == "ready" and existing_doc["file_sha256"] == file_sha256:
-        cached_chunks = get_chunks_by_doc(doc_id)
-        return {
-            "doc_id": doc_id,
-            "file_name": existing_doc["file_name"],
-            "file_size": existing_doc["file_size"],
-            "block_count": existing_doc["block_count"],
-            "chunks": cached_chunks,
-            "statistics": existing_doc["statistics"],
-            "strategy": existing_doc["strategy"],
-        }
+        cached_strategy = existing_doc.get("strategy") or {}
+        if (cached_strategy.get("min_chars") == min_chars
+                and cached_strategy.get("target_chars") == target_chars
+                and cached_strategy.get("max_chars") == max_chars
+                and cached_strategy.get("overlap_sentences") == overlap_sentences):
+            cached_chunks = get_chunks_by_doc(doc_id)
+            return {
+                "doc_id": doc_id,
+                "file_name": existing_doc["file_name"],
+                "file_size": existing_doc["file_size"],
+                "block_count": existing_doc["block_count"],
+                "chunks": cached_chunks,
+                "statistics": existing_doc["statistics"],
+                "strategy": existing_doc["strategy"],
+            }
 
     suffix = Path(file_name).suffix.lower() or ".txt"
     temp_path: str | None = None
@@ -149,11 +154,13 @@ def ingest_document(
             preprocess=preprocess_report.to_dict(),
         )
 
+        total_chars = sum(len(b.text) for b in cleaned_blocks)
         return {
             "doc_id": result["doc_id"],
             "file_name": file_name,
             "file_size": len(payload),
             "block_count": block_count,
+            "total_chars": total_chars,
             "chunks": result["chunks"],
             "statistics": result["statistics"],
             "strategy": result["strategy"],
