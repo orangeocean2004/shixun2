@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from backend.app.services.document_loader import load_document
 from backend.app.services.preprocessing import preprocess_document_blocks
-from backend.app.services.segmenting import SegmentConfig, segment_blocks, segment_parent_child
+from backend.app.services.segmenting import SegmentConfig, segment_blocks
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,9 +70,7 @@ def main() -> None:
         )
 
     if args.parent_child:
-        if config is None:
-            config = SegmentConfig()
-        config.enable_parent_child = True
+        print("[WARN] --parent-child 功能尚未实现（仅配置字段已定义），已忽略此参数。")
 
     blocks = load_document(input_path)
     preprocess_report = None
