@@ -560,11 +560,7 @@ async def upload_and_segment(
                 print(f"[EvalSync] FAILED: {e}")
                 traceback.print_exc()
 
-            # Enrichment runs in background (LLM calls may be slow)
-            background_tasks.add_task(
-                _enrich_chunks_with_llm,
-                result["chunks"],
-            )
+            # 富化已在 ingest_document 内部同步完成
 
         # ── Convert evaluation to Pydantic ──────────────────
         evaluation = None

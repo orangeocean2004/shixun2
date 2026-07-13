@@ -138,7 +138,30 @@ def ingest_document(
             )
         result = segment_blocks(cleaned_blocks, doc_id=doc_id, config=config)
 
-        # ChromaDB 入库（失败不影响分段结果返回）
+        # 同步富化：在入库前给 chunk 打标签、写摘要（LLM 不可用时静默跳过）
+        try:
+            from backend.app.core.model_settings import get_model_settings
+            from backend.app.services.organizer.model_client import LLMClient
+            from backend.app.services.organizer.organizer import ContentOrganizer
+
+            settings = get_model_settings()
+            llm = LLMClient(
+                api_key=settings["OPENAI_API_KEY"],
+                base_url=settings["OPENAI_BASE_URL"],
+                model=settings["LLM_MODEL"],
+            )
+            if llm.is_available:
+                organizer = ContentOrganizer(llm_client=llm)
+                enrich_results, _doc_summary = organizer.organize_batch_fast(result["chunks"])
+                for chunk, er in zip(result["chunks"], enrich_results):
+                    if er.tags:
+                        chunk["label"] = er.tags
+                    if er.summary:
+                        chunk["summary"] = er.summary
+        except Exception:
+            pass  # 富化失败不影响分段结果
+
+        # 入库（此时 chunk 已带标签/摘要）
         try:
             replace_chunks(doc_id, result["chunks"])
             delete_document_vectors(doc_id)
